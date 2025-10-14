@@ -14,19 +14,20 @@ source "${scriptDir}/libxlvini" || {
     echo "'libxlvini' not found in $scriptDir; please ensure it exists"; exit 1
 }
 # Optional Feature
-DebugSig=${DebugSig:-0}
-# LogSig=${LogSig:-1}
+DebugSig=${DebugSig:-1}
+LogSig=${LogSig:-0}
 Scope=${0##*/}
 
 # Globals
+cBaseMount="/run/${0##*/}"
 declare -a LOOPDEVS=()
 userMountOpts=""
 autoMode=0
-cSrcMount=""
+cMountPath=""
 cSrc=""
 cBlock=""
 cBlockPart=""
-ChrootDir=""
+cSrcDeep="" # if chrooting into a block dev and main chroot dir is withingn subfolders user can set this path via args
 
 # check if necessary packages
 RequireCmd=(
@@ -60,18 +61,18 @@ c_bind_path() {
     local bindPath="$2"
     local bindOpts="${3:-}"
     
-    # If: $src is already a mount point, either bind it to a new $bindPath (if provided), else set a flag for internal reff
-    # Else: if $src is not a mount point then bind it to itself or $bindPath (if provided)
     if mountpoint -q "$src"; then
+        # If: $src is already a mount point, either bind it to a new $bindPath (if provided), else set a flag for internal reff
         if [[ -n "$bindPath" ]]; then
-            mkdir -p "$bindPath"
+            mkdir -p "$bindPath" && cMountPathDC=1
             mount --bind "$src" "$bindPath"
         else
             isSrcPathPreMounted=1
-            cSrcMount="${cSrcMount:-$src}"
+            cMountPath="${cMountPath:-$src}"
         fi
     else
-        mkdir -p "${bindPath:-$src}"
+        # Else: if $src is not a mount point then bind it to itself or $bindPath (if provided)
+        mkdir -p "${bindPath:-$src}" && cMountPathDC=1
         mount --bind "$src" "${bindPath:-$src}"
     fi
 }
@@ -87,12 +88,8 @@ c_mount_block() {
     [[ -n $blockLabel ]] && blockLabel=".${blockLabel}"
     local blockDir="$(basename "$cBlock")${blockLabel}"
     # safe temp mount dir under /run/chrootx
-    local baseDir="/run/chrootx"
-    mkdir -p "$baseDir"
-    mountBase=$(mktemp -d "${baseDir}/${blockDir}.XXXX") || {
-        err "Failed to make temp mount dir"
-        return 1
-    }
+    mkdir -p "$cBaseMount"
+    mountBase=$(mktemp -d "${cBaseMount}/${blockDir}.XXXX")
 
     cBlockMountPath="$mountBase"
     blockMountDC=1
@@ -121,9 +118,8 @@ c_mount_block() {
         fi
     fi
 
-    # user can pass chrootDir inside the Block dev to chroot into 
+    # user can pass cSrcDeep inside the Block dev to chroot into 
     cBlockPath="${cBlockMountPath%/}"
-    [[ -n "${ChrootDir}" ]] && cBlockPath="${cBlockPath}/${ChrootDir}"
 
     c_bind_path "$cBlockPath" "$bindPath"
     return 0
@@ -141,16 +137,16 @@ c_mount_file() {
     if printf '%s' "$ftype" | grep -qiE 'ISO 9660|udf|bootable'; then
         cBlockType=iso
         inf "Detected ISO image: $img"
-        local mnt=$(mktemp -d /run/chrootx/iso.XXXX)
+        local mnt=$(mktemp -d ${cBaseMount}/iso.XXXX)
         mount -o loop,ro -- "$img" "$mnt" || { err "Failed to mount ISO $img"; rmdir "$mnt" 2>/dev/null || true; return 1; }
         cBlockMountPath="$mnt"; blockMountDC=1
-        cBlockPath="${mnt%/}${ChrootDir}"
+        cBlockPath="${mnt%/}${cSrcDeep}"
         mkdir -p "$cBlockPath" || true
         if [[ -n "$bindPath" ]]; then
             mkdir -p "$bindPath"
             mount --bind "$cBlockPath" "$bindPath"
         else
-            cSrcMount="${cSrcMount:-$cBlockPath}"
+            cMountPath="${cMountPath:-$cBlockPath}"
             isSrcPathPreMounted=1
         fi
         return 0
@@ -207,7 +203,7 @@ c_mount_file() {
         if (( ${noLosetupSig:-0} )); then
             # Attempt to mount file directly with -o loop
             local mnt
-            mnt=$(mktemp -d /run/chrootx/part-img.XXXX)
+            mnt="$(mktemp -d "${cBaseMount}/part-img.XXXX")"
             blockMountDC=1; cBlockMountPath="$mnt"
             if [[ -n "$userMountOpts" ]] || (( ${readOnlySig:-0} )); then
                 local mo="$userMountOpts"
@@ -222,11 +218,11 @@ c_mount_file() {
             else
                 mount -o loop -- "$img" "$mnt" || { err "mount -o loop failed for $img"; rmdir "$mnt" 2>/dev/null || true; return 1; }
             fi
-            cBlockPath="${mnt%/}${ChrootDir}"; mkdir -p "$cBlockPath" || true
+            cBlockPath="${mnt%/}${cSrcDeep}"; mkdir -p "$cBlockPath" || true
             if [[ -n "$bindPath" ]]; then
                 mkdir -p "$bindPath"; mount --bind "$cBlockPath" "$bindPath"
             else
-                cSrcMount="${cSrcMount:-$cBlockPath}"; isSrcPathPreMounted=1
+                cMountPath="${cMountPath:-$cBlockPath}"; isSrcPathPreMounted=1
             fi
             return 0
         else
@@ -254,45 +250,58 @@ c_mount_file() {
 # main mount handler
 c_mount() {
     cSrc="$1"
-    cSrcMount="${2:-}"
+    cMountPath="${2:-}"
     autoMode="${3:-0}"
 
-    # if user provided cSrcMount and auto mode create it
-    if [[ -n "$cSrcMount" ]]; then
-        if [[ -d "$cSrcMount" ]] || (( ${autoMode:-0} )); then
-            [[ ! -d "$cSrcMount" ]] && mkdir -p "$cSrcMount" && cMountPathDC=1
+    # if user provided cMountPath and auto mode create it
+    if [[ -n "$cMountPath" ]]; then
+        if [[ -d "$cMountPath" ]] || (( ${autoMode:-0} )); then
+            [[ ! -d "$cMountPath" ]] && mkdir -p "$cMountPath" && cMountPathDC=1
         else
-            err "Defined mount-point doesn't exist: $cSrcMount"
+            err "Defined mount-point doesn't exist: $cMountPath"
             return 1
         fi
     fi
 
     if [[ -d "$cSrc" ]]; then
-        c_bind_path "$cSrc" "$cSrcMount"
-        return 0
+        # handle / (root), mount '/' to a different mount point so unmount wont cause system crash
+        # basically the helper c_bind_path will treat / as mount point so chroot will work normally but during unmount itll try to unmount the runtime sys, proc, which can (*will) crash the running system (pty err)...
+        if [[ "$(realpath "$cSrc" 2>/dev/null)" == "/" ]]; then
+            local tempRoot=$(mktemp -d "${cBaseMount}/root.XXXX") || {
+                err "Failed to make temp mount dir"
+                return 1
+            }
+            cMountPath="${cMountPath:-$tempRoot}"
+            salrt "chrooting into \"/\" root-fs"
+            c_bind_path "$cSrc" "$cMountPath"
+            return 0
+        else
+            c_bind_path "$cSrc" "$cMountPath"
+            return 0
+        fi
     elif [[ -b "$cSrc" ]]; then
         # block device (could be partition)
         local typ
         typ=$(lsblk -n -o TYPE -- "$cSrc" 2>/dev/null | head -n1 || true)
         if [[ "$typ" == "part" ]]; then
             cBlockType="part"
-            c_mount_block "$cSrc" "$cSrcMount" "$userMountOpts"
+            c_mount_block "$cSrc" "$cMountPath" "$userMountOpts"
             return $?
         fi
         if lvdisplay "$cSrc" >/dev/null 2>&1; then
             cBlockType="lvm"
-            c_mount_block "$cSrc" "$cSrcMount" "$userMountOpts"
+            c_mount_block "$cSrc" "$cMountPath" "$userMountOpts"
             return $?
         fi
         if vgdisplay "$cSrc" >/dev/null 2>&1; then
             cBlockType="vg"
-            c_mount_block "$cSrc" "$cSrcMount" "$userMountOpts"
+            c_mount_block "$cSrc" "$cMountPath" "$userMountOpts"
             return $?
         fi
         err "Unknown block device type for $cSrc"
         return 1
     elif [[ -f "$cSrc" ]]; then
-        c_mount_file "$cSrc" "$cSrcMount"
+        c_mount_file "$cSrc" "$cMountPath"
         return $?
     else
         err "Unhandled chroot source: '$cSrc'"
@@ -304,14 +313,14 @@ c_mount() {
 c_mount_local_media() {
     for i in /media/*; do
         [[ -e "$i" ]] || continue
-        local dest="${cSrcMount:-$cBlockPath}${i}"
+        local dest="${cMountPath:-$cBlockPath}${i}"
         mkdir -p "$dest"
         if mountpoint -q "$i"; then
             mount --bind -- "$i" "$dest" || true
         fi
         for j in "$i"/*; do
             [[ -e "$j" ]] || continue
-            local dd="${cSrcMount:-$cBlockPath}${j}"
+            local dd="${cMountPath:-$cBlockPath}${j}"
             mkdir -p "$dd"
             [[ -d "$j" ]] && mount --bind -- "$j" "$dd" || true
         done
@@ -321,50 +330,54 @@ c_mount_local_media() {
 # unmount and cleanup
 c_umount() {
     # unmount safely || use lazy unmount fallback
-    safe_umount() {
+    _safe_umount() {
         local target="$1"
         if [[ -z "$target" ]]; then return; fi
+        sdebug "umount $NC$target"
         if mountpoint -q "$target"; then
             if umount "$target" >/dev/null 2>&1; then
                 true
             else
-                umount -l "$target" >/dev/null 2>&1 || wrn "Failed to unmount $target"
+                umount -l "$target" >/dev/null 2>&1 || wrn "Failed to unmount $NC$target"
             fi
         fi
     }
 
     # If noUnmountSig is set, skip
     if (( ${noUnmountSig:-0} )); then
-        inf "Skipping unmount on request (--no-unmount)"
+        swrn "Skipping unmount on request (--no-unmount)"
     else
-        # Unmount any bind mounts referencing cSrcMount
-        if [[ -n "${cSrcMount:-}" ]]; then
-            # list mountpoints matching cSrcMount
+        # Unmount any bind mounts referencing cMountPath
+        if [[ -n "${cMountPath:-}" ]]; then
+            # list mountpoints matching cMountPath
             local mp
             while read -r mp; do
-                safe_umount "$mp"
-            done < <(grep -F "${cSrcMount}" /proc/mounts | awk '{print $2}' | sort -r)
+                # skip unmounting cMountPath if it was pre mounted
+                if (( ${isSrcPathPreMounted:-0} )) && [[ "$mp" == "$cMountPath" ]]; then
+                    continue
+                    salrt "skipping unmount for $NC\"/\""
+                fi
+                _safe_umount "$mp"
+            done < <(grep -F "${cMountPath}" /proc/mounts | awk '{print $2}' | sort -r)
+
+            # remove cMountPath dir if we created it
+            if (( ${cMountPathDC:-0})) && [[ "$(realpath "$cMountPath" 2>/dev/null)" != "/" ]] && [[ -n "${cMountPath:-}" ]];then
+                sdebug "rmdir  $NC$cMountPath"
+                rmdir "$cMountPath" 2>/dev/null || true
+            fi
         fi
+
 
         # unmount block mount dir if created
         if [[ -n "${cBlockMountPath:-}" && -d "$cBlockMountPath" ]]; then
             # unmount any mounts under cBlockMountPath
             while read -r mp; do
-                safe_umount "$mp"
+                _safe_umount "$mp"
             done < <(grep -F "$cBlockMountPath" /proc/mounts | awk '{print $2}' | sort -r)
             # finally remove dir
             rmdir "$cBlockMountPath" 2>/dev/null || true
         fi
 
-        # remove cSrcMount dir if we created it
-        if (( ${cMountPathDC:-0})) || (( ${forceUnmountSig:-0} )); then
-            if [[ -n "${cSrcMount:-}" ]]; then
-                while read -r mp; do
-                    safe_umount "$mp"
-                done < <(grep -F "${cSrcMount}" /proc/mounts | awk '{print $2}' | sort -r)
-                rmdir "$cSrcMount" 2>/dev/null || true
-            fi
-        fi
     fi
 
     # detach any loop devices we created (reverse order)
@@ -376,7 +389,7 @@ c_umount() {
             if [[ -n "$ld" && -b "$ld" ]]; then
                 # unmount any mounts referencing partitions of ld
                 while read -r mp; do
-                    safe_umount "$mp"
+                    _safe_umount "$mp"
                 done < <(lsblk -n -o MOUNTPOINT "${ld}"* 2>/dev/null | grep -v '^$' || true)
                 if ! losetup -d "$ld" >/dev/null; then
                     wrn "Failed to detach loop device $ld"
@@ -415,18 +428,18 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -a|auto) autoMode=1 ;;
-        mount) cSrcMount="$2"; shift ;;
+        mount) cMountPath="$2"; shift ;;
         -p|part) cBlockPart="$2"; shift ;;
-        -C|compress|--mount-opts) userMountOpts="$2"; shift ;;
-        --no-losetup) noLosetupSig=1 ;;
-        --ro|read-only) readOnlySig=1 ;;
-        -m|--mlm|--mount-local-media) mlmSig=1 ;;
-        -u|--force-umount) forceUnmountSig=1 ;;
-        --no-unmount|--num) noUnmountSig=1 ;;
+        mount-opts) userMountOpts="$2"; shift ;;
+        no-losetup) noLosetupSig=1 ;;
+        ro|read-only) readOnlySig=1 ;;
+        --mlm|mount-local-media) mlmSig=1 ;;
+        -U|force-umount) forceUnmountSig=1 ;;
+        no-unmount|--num) noUnmountSig=1 ;;
         -f|fallback) fallbackSig=1 ;;
-        -s|shell) shellType="$2"; shift ;;
-        -d|chroot-dir) ChrootDir="$2"; shift ;;
-        -z|zsh) shellType="/usr/bin/zsh" ;;
+        -s|shell) cShell="$2"; shift ;;
+        -d|chroot-dir) cSrcDeep="$2"; shift ;;
+        -z|zsh) cShell="/usr/bin/zsh" ;;
         -h|help) usage; exit 0 ;;
         *)
             # first non-flag arg is source path if not set
@@ -452,37 +465,43 @@ fi
 echo ""
 
 # -- MAIN --
-trap 'c_umount' EXIT INT TERM ERR
-
-c_mount "$cSrc" "${cSrcMount:-}" "$autoMode" || wrn "Mount operation returned non-zero"
+mkdir -p "$cBaseMount"
+c_mount "$cSrc" "${cMountPath:-}" "$autoMode" || wrn "Mount operation returned non-zero"
+[[ "$(realpath "$cSrc" 2>/dev/null)" != "/" ]] && trap 'c_umount' EXIT INT TERM ERR
 
 (( ${mlmSig:-0} )) && c_mount_local_media
 
-shellType=${shellType:-/usr/bin/bash}
-# Info
-( 
-    # scope="-\c${scriptName}"
-    # echo ""
-sinf "[\
-$([ -n "$cBlock" ]    && echo "${NC}${cBlockType:-block}-\c -> ${NC}$cBlock-\c$([ -n "$cBlockFs" ] && echo " -> ${NC}$cBlockFs-\c") | ")\
-$([ -n "$cSrcMount" ] && echo "${NC}$cSrcMount-\c")\
-$([ -n "$shellType" ] && echo " | ${NC}$shellType-\c")\
-$([ $# -gt 0 ] && echo -n " | ${NC}$*-\c")\
-]"
-# [[ ! -t 0 ]] && echo ""
-)
+PATH_host=$PATH
+PATH_chroot=/bin:/sbin:/usr/bin:/usr/sbin:/x/bin/sh:$PATH
+cShell=${cShell:-/usr/bin/bash}
+cPath="$cMountPath"
+[[ -n "${cSrcDeep}" ]] && cPath="${cPath}/${cSrcDeep}"
+
 # Terminal title updater (background)
 c_terminal_title() {
+    local cSrcD="$cSrc"
+    [[ -n "${cSrcDeep}" ]] && cSrcD="${cSrcD}/${cSrcDeep}"
+    # [[ -n "${cSrcDeep}" ]] && cSrcD="${cSrcD}/${cSrcDeep}"
     while :; do
-        echo -ne "\033]0;chroot - $(basename "$shellType") - $cSrc\007"
+        echo -ne "\033]0;chroot - $(basename "$cShell") - $cSrcD\007"
         sleep 0.5
     done
 }
 c_terminal_title & c_TERMINAL_TITLE_PID=$!
+# Chroot Info
+( 
+    # echo ""
+sinf "[\
+$([ -n "$cBlock" ]    && echo "${NC}${cBlockType:-block}-\c -> ${NC}$cBlock-\c$([ -n "$cBlockFs" ] && echo " -> ${NC}$cBlockFs-\c") | ")\
+$([ -n "$cPath" ] && echo "${NC}$cPath-\c")\
+$([ -n "$cShell" ] && echo " | ${NC}$cShell-\c")\
+$([ $# -gt 0 ] && echo -n " | ${NC}$*-\c")\
+]"
+# [[ ! -t 0 ]] && echo ""
+)
+
 
 # chroot environment setup
-PATH_host=$PATH
-PATH_chroot=/bin:/sbin:/usr/bin:/usr/sbin:/x/bin/sh:$PATH
 
 # Workaround for Termux: remove preloaded shared libraries {*.so} that can (*will) cause issue
 # in future script may have option to handle this properly
@@ -495,33 +514,34 @@ export TMPDIR=/tmp
 
 # Try arch-chroot first if available
 if command -v arch-chroot >/dev/null 2>&1; then
-    arch-chroot "${cSrcMount:-$cBlockPath}" "$shellType"
+    arch-chroot "${cPath}" "$cShell"
     if (( $? != 0 && ${fallbackSig:-0} )); then
         inf "[init-fallback] arch-chroot failed; trying manual chroot"
         export PATH="$PATH_host"
-        mount --bind /dev "${cSrcMount}/dev" || true
-        mount --bind /dev/pts "${cSrcMount}/dev/pts" || true
-        mount --bind /proc "${cSrcMount}/proc" || true
-        mount --bind /sys "${cSrcMount}/sys" || true
-        [[ -d /run ]] && mount --bind /run "${cSrcMount}/run" || true
-        [[ -d /tmp ]] && mount --bind /tmp "${cSrcMount}/tmp" || true
-        [[ -e /etc/resolv.conf ]] && mount --bind /etc/resolv.conf "${cSrcMount}/etc/resolv.conf" || true
-        chroot "${cSrcMount}" "$shellType"
+        mount --bind /dev "${cPath}/dev" || true
+        mount --bind /dev/pts "${cPath}/dev/pts" || true
+        mount --bind /proc "${cPath}/proc" || true
+        mount --bind /sys "${cPath}/sys" || true
+        [[ -d /run ]] && mount --bind /run "${cPath}/run" || true
+        [[ -d /tmp ]] && mount --bind /tmp "${cPath}/tmp" || true
+        [[ -e /etc/resolv.conf ]] && mount --bind /etc/resolv.conf "${cPath}/etc/resolv.conf" || true
+        chroot "${cPath}" "$cShell"
     fi
 else
     # no arch-chroot: fall back to manual chroot
     export PATH="$PATH_host"
-    mount --bind /dev "${cSrcMount}/dev" || true
-    mount --bind /dev/pts "${cSrcMount}/dev/pts" || true
-    mount --bind /proc "${cSrcMount}/proc" || true
-    mount --bind /sys "${cSrcMount}/sys" || true
-    [[ -d /run ]] && mount --bind /run "${cSrcMount}/run" || true
-    [[ -d /tmp ]] && mount --bind /tmp "${cSrcMount}/tmp" || true
-    [[ -e /etc/resolv.conf ]] && mount --bind /etc/resolv.conf "${cSrcMount}/etc/resolv.conf" || true
-    chroot "${cSrcMount}" "$shellType"
+    mount --bind /dev "${cPath}/dev" || true
+    mount --bind /dev/pts "${cPath}/dev/pts" || true
+    mount --bind /proc "${cPath}/proc" || true
+    mount --bind /sys "${cPath}/sys" || true
+    [[ -d /run ]] && mount --bind /run "${cPath}/run" || true
+    [[ -d /tmp ]] && mount --bind /tmp "${cPath}/tmp" || true
+    [[ -e /etc/resolv.conf ]] && mount --bind /etc/resolv.conf "${cPath}/etc/resolv.conf" || true
+    chroot "${cPath}" "$cShell"
 fi
 
 # normal exit will trigger trap => c_umount
 [[ -n "${c_TERMINAL_TITLE_PID:-}" ]] && kill "$c_TERMINAL_TITLE_PID" 2>/dev/null || true
-sinf "[EXIT ${NC}${cSrcMount:-$cBlockPath}-\c]"
+sinf "[EXIT ${NC}${cPath}-\c]"
+c_umount
 exit 0
