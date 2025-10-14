@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+#@info fix for "madam: no array found in config files.." at boot..
+
+sudo mdadm --detail --scan >> /etc/mdadm.conf&&
+sudo update-initramfs -u&&
+sudo update-grub

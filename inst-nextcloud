@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+# Install necessary packages
+echo "Updating apt..."
+#apt update
+
+pkg=(
+    #required modules
+    apache2 php libapache2-mod-php mariadb-server  # php-filter php-hash php-libxml php-openssl php-session php-zlib
+    php-curl php-gd php-mbstring php-xml php-zip php-dom php-ctype php-fileinfo php-json php-posix php-simplexml php-xmlreader php-xmlwriter php-pdo-mysql
+
+    #server perfomance
+    php-apcu php-memcached php-redis
+
+    #recommended
+    php-bz2 php-intl php-exif
+
+    # preview gen
+    imagemagick ffmpeg
+
+    #required for spec app
+    php-ldap php-smbclient php-ftp php-imap php-bcmath php-gmp
+    )
+
+echo "Installing packages..."
+echo "pkg-list ${pkg[@]}"
+sudo apt-get install -y $(echo "${pkg[@]}")
+
+# Create a new MySQL database and user
+echo "Creating a new MySQL database and user..."
+systemctl start mariadb.service
+mysql -u root <<EOF
+CREATE DATABASE nextcloud CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+CREATE USER 'nextclouduser'@'localhost' IDENTIFIED BY 'nt1@xLvini#localsrv.db.12109';
+GRANT ALL PRIVILEGES ON nextcloud.* TO 'nextclouduser'@'localhost';
+FLUSH PRIVILEGES;
+EXIT
+EOF
+
+# Download and extract Nextcloud
+echo "Downloading and extracting Nextcloud..."
+wget https://download.nextcloud.com/server/releases/latest.tar.bz2
+tar -xvf latest.tar.bz2 -C /var/www/ #>/dev/null 2>&1
+rm latest.tar.bz2
+
+# Configure permissions and ownership
+echo "Configuring permissions and ownership..."
+chown -R www-data:www-data /var/www/nextcloud/
+chmod -R 755 /var/www/nextcloud/
+#find /var/www/nextcloud -type f -print0 | xargs -0 chmod 0640
+#find /var/www/nextcloud -type d -print0 | xargs -0 chmod 0750
+
+# Configure Apache for Nextcloud
+echo "Configuring Apache for Nextcloud..."
+cat <<EOF > /etc/apache2/sites-available/nextcloud.conf
+Listen 8080
+
+<VirtualHost *:8080>
+    ServerName ntl.xlvini.com
+    DocumentRoot /var/www/nextcloud
+
+    <Directory /var/www/nextcloud>
+        Options +FollowSymlinks
+        AllowOverride All
+        Require all granted
+
+        <IfModule mod_dav.c>
+            Dav off
+        </IfModule>
+
+        SetEnv HOME /var/www/nextcloud
+        SetEnv HTTP_HOME /var/www/nextcloud
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/nextcloud-error.log
+    CustomLog \${APACHE_LOG_DIR}/nextcloud-access.log combined
+</VirtualHost>
+EOF
+
+a2ensite nextcloud.conf
+a2enmod rewrite
+systemctl restart apache2
+
+# Set up cron jobs for Nextcloud
+echo "Setting up cron jobs for Nextcloud..."
+cat <<EOF > /etc/cron.d/nextcloud
+*/5  *  *  *  * www-data php -f /var/www/nextcloud/cron.php
+EOF
+
+
+
+# Complete the installation through the web interface
+echo "Nextcloud installation complete. Access the web interface to complete the installation."

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# @inf: install latest nodejjs in debian
+
+# add repo && install
+curl -fsSL https://deb.nodesource.com/setup_current.x | bash - &&\
+apt-get install -y nodejs
+
+
+# remove nodejs
+#apt-get purge nodejs &&\
+#rm -r /etc/apt/sources.list.d/nodesource.list
+#

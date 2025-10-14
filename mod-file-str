@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+# Script to replace a string in all lines of executable files under a directory.
+
+# --- Defaults ---
+TARGET_DIR="."
+SEARCH_STRING=""
+REPLACE_STRING=""
+
+# --- Logging ---
+log() { echo "[${1^^}] ${*:2}"; }
+
+# --- Usage ---
+usage() {
+    echo "Usage: $0 -d <dir> -s <search> -r <replace>"
+    echo "Example: $0 -d ./scripts -s '/bin/bash' -r '/usr/bin/env bash'"
+    exit 1
+}
+
+# --- Argument Parsing ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d|--directory) TARGET_DIR="$2"; shift 2 ;;
+        -s|--search) SEARCH_STRING="$2"; shift 2 ;;
+        -r|--replace) REPLACE_STRING="$2"; shift 2 ;;
+        -h|--help) usage ;;
+        *) log error "Unknown option: $1"; usage ;;
+    esac
+done
+
+[[ -z $SEARCH_STRING || -z $REPLACE_STRING ]] && { log error "Search and replace strings are required."; usage; }
+[[ ! -d $TARGET_DIR ]] && { log error "Directory '$TARGET_DIR' not found."; exit 1; }
+
+# --- Escape search string for sed ---
+ESCAPED_SEARCH=$(printf '%s\n' "$SEARCH_STRING" | sed 's/[&/\]/\\&/g')
+
+log info "Replacing string in executable files:"
+log info "  Dir: $TARGET_DIR"
+log info "  From: $SEARCH_STRING"
+log info "  To:   $REPLACE_STRING"
+
+# --- Main Logic ---
+while IFS= read -r -d '' file; do
+    if grep -qF "$SEARCH_STRING" "$file"; then
+        sed -i.bak "s|$ESCAPED_SEARCH|$REPLACE_STRING|g" "$file" && rm -f "${file}.bak"
+        log info "Updated: $file"
+    fi
+done < <(find "$TARGET_DIR" -type f -executable -print0)
+
+log info "Replacement completed."

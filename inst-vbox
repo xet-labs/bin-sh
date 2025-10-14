@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+	
+	
+linkDest=/etc/apt/sources.list.d/virtualbox.list
+	
+linkPost() {
+	inf "> $(printf '%s\n' "$1" | sudo tee $linkDest)"
+}
+
+inf "configuring repo link.."
+repoLink="deb [arch=amd64 signed-by=/usr/share/keyrings/oracle-virtualbox-2016.gpg] https://download.virtualbox.org/virtualbox/debian bullseye contrib"
+linkPost "$repoLink"
+
+inf "configuring gpg keys.."
+wget -O- https://www.virtualbox.org/download/oracle_vbox_2016.asc | sudo gpg --dearmor --yes --output /usr/share/keyrings/oracle-virtualbox-2016.gpg
+
+msg "making Vbox.."
+sudo apt-get update
+sudo apt-get -y install virtualbox
+

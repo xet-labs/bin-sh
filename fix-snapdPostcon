@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# @info "fix snap services err "
+# needs to be run after snap installation
+
+sudo systemctl start snapd
+sudo systemctl enable snapd
+sudo systemctl enable --now apparmor.service
+sudo systemctl enable --now snapd.apparmor.service
+
+
+

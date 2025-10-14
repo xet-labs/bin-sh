@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+# lists gdrive "file id" in regular name
+gio list -a "standard::display-name"

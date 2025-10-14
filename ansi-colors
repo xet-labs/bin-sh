@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+#- print ansi sgr colors
+clear
+str="ANSI colors are woow  "
+
+# Set base attribute value here (e.g. 0, 1, etc.)
+base_attr=0
+
+# Standard + Bright Foreground colors
+fg_colors=(30 31 32 33 34 35 36 37 90 91 92 93 94 95 96 97)
+
+# Standard + Bright Background colors
+bg_colors=(40 41 42 43 44 45 46 47 100 101 102 103 104 105 106 107)
+
+for fg in "${fg_colors[@]}"; do
+	for ((attr = base_attr; attr <= base_attr + 5; attr++)); do
+		# echo -en "\e[2m\\\033[$attr;${fg}m\t"
+		:
+	done
+		echo -en "\e[2m$fg:\t"
+
+	for ((attr = base_attr; attr <= base_attr + 5; attr++)); do
+		echo -en "\033[${attr};${fg}m$str\e[0m"
+	done
+	echo ""
+done
+
+for bg in "${bg_colors[@]}"; do
+	for ((attr = base_attr; attr <= base_attr + 5; attr++)); do
+		# echo -en "\e[2m\\\033[$attr;${bg}m\t"
+		:
+	done
+
+	echo -en "\e[2m$bg:\t"
+
+	for ((attr = base_attr; attr <= base_attr + 5; attr++)); do
+		echo -en "\033[${attr};${bg}m$str\e[0m"
+	done
+	echo ""
+
+done

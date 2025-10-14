@@ -1,0 +1,466 @@
+#!/usr/bin/env bash
+
+#- --LIB--
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+
+#- Default config
+k_arch=arm64
+k_out_dir="out"
+
+toolch_cc=/media/xet/datx/@mr._rish/lab/-toolchain/clang-r416183b1/bin/clang
+toolch_32=/@armory/android/git/-toolchain/-google/arm-eabi-4.8/bin/arm-eabi-
+toolch_32=/@armory/android/git/-toolchain/-google/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-
+toolch_64=/@armory/android/git/-toolchain/-google/aarch64-linux-android-4.9/bin/aarch64-linux-android-
+          
+
+#- Script Defaults, do not modify unless necessary
+show_only_exported_PATH=1
+scope="${scriptName}"
+k_gcc32Sig=1
+k_gcc64Sig=1
+k_export=""
+k_param=""
+
+
+notify(){
+	[ ${norunSig:-0} -ne 1 ] && echo -ne "\a"
+}
+
+is_64bit() {
+	local arch="${1,,}"  #- Convert to lowercase
+
+	#- Auto-detect if not passed
+	[ -z "$arch" ] && arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
+
+	case "$arch" in
+		arm64 | aarch64 | x86_64 | amd64 | mips64* | riscv64 | loongarch64)
+			return 0 ;;
+		*)
+			return 1 ;;
+	esac
+}
+
+is_valid_path() {
+	local path="$1"
+
+	[ -n "$path" ] || return 1
+	# If absolute or relative path and exists
+	if [[ "$path" == */* ]]; then
+		[[ -e "$path" ]] && return 0
+	else
+		# Just a name: check in current directory
+		[[ -e "./$path" ]] && return 0
+	fi
+
+	return 1
+}
+
+get_dirname(){
+	local path="$1"
+	local resolved=
+
+	if [[ "$path" == *'*' ]]; then
+		if compgen -G "$path" > /dev/null; then
+			resolved=$(dirname "$path")
+			echo "$resolved"
+			return 0
+		fi
+	else
+		if [ -e "$path" ]; then
+			resolved=$(dirname "$path")
+			echo "$resolved"
+			return 0
+		fi
+	fi
+
+	return 1
+}
+
+get_ver() {
+	ver=$(echo -n "$1" | grep -oE '^[0-9x]+\.[0-9x]+(\.[0-9x]+)?')
+	# if [ -z "$ver" ]; then
+	# 	echo "x.x.x"
+	# 	return
+	# fi
+	if [ -z "$ver" ]; then
+		# Try to extract a single number (e.g., "14") and format it as x.0.0
+		ver=$(echo -n "$1" | grep -oE '^[0-9x]+')
+		if [ -z "$ver" ]; then
+			echo "x.x.x"
+			return
+		fi
+		echo "${ver}.0.0"
+		return
+	fi
+
+	IFS='.' read -r a b c <<< "$ver"
+	echo "${a:-0}.${b:-0}.${c:-0}"
+}
+
+show_toolch(){
+	_binary="${!1}${2}"
+	_wrm_msg="${3}"
+	_ver=${1}_ver
+	_bin=${1}_bin
+
+	# [ -n "${!_bin}" ] && [ -d "${!_bin}" ] &&
+	command -v "${_binary}" >/dev/null &&
+	msg "${1}= $(inf "${!_ver}  |  ${!1}")" || \
+	wrn "${1}= $(inf "${!_ver}  |  $(wrn "${_wrn_msg:-path not found}")--\c '${!1}'")"
+}
+
+dconf_exists() {
+	local input="$1"
+
+	# Build list of all relative paths to *_defconfig files
+	mapfile -t config_list < <(cd "$k_conf_dir" && find . -type f -name '*_defconfig' -printf '%P\n')
+
+	for conf in "${config_list[@]}"; do
+		if [[ "$conf" == "$input" ]]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+#- parse args 
+while [[ ${#:-0} -gt 0 ]]; do
+
+	case $1 in
+		a|arch|-a|--arch) 
+			k_arch="$2"
+			shift 2 ;;
+		ARCH=*|a=*|arch=*|-a=*|--arch=*) 
+			k_arch="${1#*=}"
+			shift 1 ;;
+		e|export|-e|--export)
+			k_export="$2"
+			shift 2 ;;
+		e=*|export=*|-e=*|--export=*)
+			k_export="${1#*=}"
+			shift ;;
+		d|-d)
+			k_dir="$2"
+			k_dirSig=1
+			shift 2 ;;
+		O|-O|out|--out) 
+			k_out_dir="$2"
+			k_out_dirSig=1
+			shift 2 ;;
+		O=*|-O=*|out=|--out=)
+			k_out_dir="${1#*=}"
+			k_out_dirSig=1
+			shift ;;
+		mkv|make-kernel-version|-mkv|--make-kernel-version) 
+			k_makeKernVerSig=1
+			shift ;;
+		mm|-mm) 
+			k_menuconfigSig="1"
+			shift ;;
+        j|-j|--jobs)
+            k_nproc="$2"
+            shift 2
+            ;;
+    	j*|-j*|--jobs=*)
+			k_nproc="${1#*=}"  # handles --jobs=N or -jN
+			[[ "$k_nproc" == "$1" ]] && k_nproc="${1#-j}" 
+			[[ "$k_nproc" == "$1" ]] && {  # if no '=', then maybe it's like -j4
+				k_nproc="${1:2}"
+			}
+        	shift ;;
+		c|clean|-c|--clean )
+			k_cleanSig=1
+			shift ;;
+		C|Clean|-C|--Clean )
+			k_cleanSig=1
+			k_cleanOutSig=1
+			shift ;;
+		v|V|-v|-V) 
+			k_verboseSig=1
+			k_verbose="V=${2}"
+			k_param+="V=${2} "
+			shift 2;;
+		v=*|V=*)
+			k_verboseSig=1
+			k_verbose="V=${1#*=}"
+			k_param+="V=${1#*=} "
+			shift ;;
+		no-gcc|gcc!)
+			k_gcc32Sig=0
+			k_gcc64Sig=0
+			shift ;;
+		n|-n)
+			norunSig=1
+			shift ;;
+		kd|--kd|kern-dconf|--kern-dconf)
+			k_conf="$2"
+			shift 2 ;;
+		kd=*|--kd=*)
+			k_conf="${1#*=}"
+			shift ;;
+		kvd|--kvd|kern-variant-dconf|--kern-variant-dconf)
+			k_vconf="VARIANT_DEFCONFIG=$2"
+			shift 2 ;;
+		kvd=*|--kvd=*|VARIANT_DEFCONFIG=*)
+			k_vconf="VARIANT_DEFCONFIG=${1#*=}"
+			shift ;;
+		kdd|--kdd|kern-debug-dconf|--kern-debug-dconf)
+			k_dconf="DEBUG_DEFCONFIG=$2"
+			shift 2 ;;
+		kdd=*|--kdd=*|DEBUG_DEFCONFIG=*)
+			k_dconf="DEBUG_DEFCONFIG=${1#*=}"
+			shift ;;
+		ksd|--ksd|kern-selinux-dconf|--kern-selinux-dconf)
+			k_sconf="SELINUX_DEFCONFIG=$2"
+			shift 2 ;;
+		ksd=*|--ksd=*|SELINUX_DEFCONFIG=*)
+			k_sconf="SELINUX_DEFCONFIG=${1#*=}"
+			shift ;;
+		ksld|--ksld|kern-selinux-log-dconf|--kern-selinux-log-dconf)
+			k_slconf="SELINUX_LOG_DEFCONFIG=$2"
+			shift 2 ;;
+		ksld=*|--ksld=*|SELINUX_LOG_DEFCONFIG=*)
+			k_slconf="SELINUX_LOG_DEFCONFIG=${1#*=}"
+			shift ;;
+		tc32|-tc32 | --tc32)
+			toolch_32="$2"
+			shift 2 ;;	
+		tc64|-tc64|--tc64)
+			toolch_64="$2"
+			shift 2 ;;
+		CC|tcc|--tcc)
+			toolch_cc="$2"
+			k_ccSig=1
+			shift 2 ;;
+		CC=*|tcc=*|--tcc=*)
+			toolch_cc="${1#*=}"
+			k_ccSig=1
+			shift ;;
+		C3|tc3|--tc3)
+			toolch_c3="$2"
+			k_c3Sig=1
+			shift 2 ;;
+		CLANG_TRIPLE=*|tc3=*|--tc3=*)
+			toolch_c3="${1#*=}"
+			k_c3Sig=1
+			shift ;;
+		CROSS_COMPILE=*)
+			toolch_gcc="${1#*=}"
+			shift ;;
+		CROSS_COMPILE_COMPAT=*)
+			toolch_gcco="${1#*=}"
+			shift ;;
+		cc|clang|--clang )
+			k_ccSig=1
+			shift ;;
+		c3|clang3|--clang3 )
+			k_c3Sig=1
+			shift ;;
+		cx|clangx|--clangx )
+			k_ccSig=1
+			k_c3Sig=1
+			shift ;;
+		LLVM|llvm|--llvm )
+			k_llvmSig=1
+			k_llvm="LLVM=1 "
+			k_param+="LLVM=1 "
+			shift ;;
+		LLVM=*|llvm=*|--llvm=* )
+			k_llvmSig=1
+			k_llvm="LLVM=${1#*=} "
+			k_param+="LLVM=${1#*=} "
+			shift ;;
+		LLVM_IAS=*|llvm_ias=*|--llvm_ias=* )
+			k_llvm_iasSig=1
+			k_llvm_ias="LLVM_IAS=${1#*=} "
+			k_param+="LLVM_IAS=${1#*=} "
+			shift ;;
+		*=*)
+			# k_param+="${1#*=} "
+			k_param+="${1} "
+			shift ;;
+	   	-h | --help)
+            usage; exit 0 ;;
+   	    *)
+            alrt "Error: Invalid option \"$1\""
+            usage; exit 1 ;;
+        :)
+            alrt "Error: Option \"$1\" requires an argument."
+            usage; exit 1 ;;
+        ?)
+            alrt "Error: Invalid option \"$1\""
+            usage; exit 1 ;;
+	esac
+
+done
+
+#- --MAIN--
+#- prepare required vars
+is_64bit "${k_arch}" && k_64Sig=1 || k_64Sig=0
+
+k_dir="$(realpath "${k_dir:-$PWD}")"
+k_conf_dir="${k_dir}/arch/${k_arch}/configs"
+k_nproc=${k_nproc:-$(nproc --all)}
+
+#- params - 32 bit
+if [ "${k_64Sig:-0}" -eq 1 ]; then
+	toolch_32="${toolch_gcco:-${toolch_32}}"
+else
+	toolch_32="${toolch_gcc:-${toolch_32}}"
+fi
+toolch_32_pre=$(basename "${toolch_32}")
+toolch_32_bin=$(get_dirname "${toolch_32}*")
+toolch_32_ver=$(get_ver $("${toolch_32}gcc" -dumpversion 2>/dev/null))
+
+if [ "${k_gcc32Sig:-0}" -eq 1 ];then
+	k_gcc="CROSS_COMPILE=${toolch_32_pre}"
+	is_valid_path "$toolch_32_bin" && newPATH="${newPATH:+${newPATH}:}${toolch_32_bin}" && ((path_n++))
+fi
+#- params - 64 bit
+if [ "${k_64Sig:-0}" -eq 1 ]; then
+	toolch_64=${toolch_gcc:-${toolch_64}}
+	toolch_64_pre=$(basename "${toolch_64}")
+	toolch_64_bin=$(get_dirname "${toolch_64}*")
+	toolch_64_ver=$(get_ver $("${toolch_64}gcc" -dumpversion 2>/dev/null))
+
+	if [ "${k_gcc64Sig:-0}" -eq 1 ];then
+		k_gcc="CROSS_COMPILE=${toolch_64_pre} CROSS_COMPILE_COMPAT=${toolch_32_pre}"
+		is_valid_path "$toolch_64_bin" && newPATH="${newPATH:+${newPATH}:}${toolch_64_bin}" && ((path_n++))
+	fi
+fi
+#- params - CC
+if [ "${k_ccSig:-0}" -eq 1 ]; then
+	toolch_cc_pre=$(basename "${toolch_cc}")
+	toolch_cc_bin=$(get_dirname "${toolch_cc}*")
+	toolch_cc_ver=$(get_ver $("${toolch_cc}" -dumpversion 2>/dev/null))
+	k_cc="CC=${toolch_cc:-clang}"
+	k_cc_pre="CC=${toolch_cc_pre:-clang}"
+	k_clang+="${k_cc_pre} "
+
+	is_valid_path "$toolch_cc_bin" && newPATH="${newPATH:+${newPATH}:}${toolch_cc_bin}" && ((path_n++))
+fi
+
+#- params - CLANG_TRIPLE
+if [ "${k_c3Sig:-0}" -eq 1 ]; then
+	toolch_c3="${toolch_c3:-$toolch_64}"
+	toolch_c3_pre=$(basename "${toolch_c3}")
+	toolch_c3_bin=$(get_dirname "${toolch_c3}*")
+	toolch_c3_ver=$(get_ver $("${toolch_c3}gcc" -dumpversion 2>/dev/null))
+	k_c3="CLANG_TRIPLE=${toolch_c3}"
+	k_c3_pre="CLANG_TRIPLE=${toolch_c3_pre}"
+	k_clang+="${k_c3_pre}"
+
+	#- add 
+	case ":$newPATH:" in
+	*:"${toolch_c3_bin}":*) ;;
+	*) is_valid_path "$toolch_c3_bin" && newPATH="${newPATH:+${newPATH}:}${toolch_c3_bin}" && ((path_n++)) ;;
+	esac
+fi
+
+#- prep parameters
+k_param="${k_clang} ${k_param}"
+
+#- prep PATH
+newPATH="${newPATH}":"${PATH}"
+[ "${newPATH}" != "${PATH}" ] && export PATH=$newPATH
+
+#- prompt to select a defconfig if no defconfig passed
+[ -z "$k_conf" ] && \
+[ -d "$k_conf_dir" ] && \
+k_conf="$( cd "$k_conf_dir" || exit; find . -type f -name '*defconfig' | fzf | sed 's|^\./||' )"
+
+#- show arch, outd, srcd
+msg "Arch= $(inf "$k_arch |")--\c Outd= $(inf "$k_out_dir")"; msg "Srcd= $(inf "$k_dir")"; #msg "Confd= $(inf "$k_conf_dir")"
+echo ""
+
+#- show defconfigs being used
+[ -n "$k_conf" ]   	&& _k_conf=${k_conf#*=}    		&& msg "Conf= $(inf "${_k_conf:---}")" || \
+wrn "Conf= $(inf "'${_k_conf}'")--\c path not found !!"
+[ -n "$k_vconf" ]  	&& _k_vconf=${k_vconf#*=}   	&& msg "Vconf= $(inf "${_k_vconf:---}")"
+[ -n "$k_dconf" ]  	&& _k_dconf=${k_dconf#*=}   	&& msg "Dconf= $(inf "${_k_dconf:---}")"
+[ -n "$k_sconf" ]  	&& _k_sconf=${k_sconf#*=}   	&& msg "Sconf= $(inf "${_k_sconf:---}")"
+[ -n "$k_slconf" ] 	&& _k_slconf=${k_slconf#*=} 	&& msg "Slconf= $(inf "${_k_slconf:---}")"
+echo ""
+
+#- show toolchain with version
+[ "${k_gcc32Sig:-0}" -eq 1 ] && show_toolch "toolch_32" "gcc"
+[ "${k_gcc64Sig:-0}" -eq 1 ] && \
+[ "${k_64Sig:-0}" -eq 1 ] && show_toolch "toolch_64" "gcc"
+[ "${k_ccSig:-0}" -eq 1 ] && show_toolch "toolch_cc"
+[ "${k_c3Sig:-0}" -eq 1 ] && show_toolch "toolch_c3" "gcc" "prefix not found"
+echo ""
+
+#- show PATH
+[ -n "${path_n}" ] && [ "${show_only_exported_PATH:-0}" -eq 1 ] && \
+msg "PATH:\n$(inf "$(echo "$PATH" | tr ':' '\n' | ( [ "${show_only_exported_PATH:-0}" -eq 1 ] && head -n "$path_n" || cat ))")" && echo ""
+
+#- configure export's
+k_export="ARCH=$k_arch SUBARCH=$k_arch HEADER_ARCH=$k_arch OUT_DIR="$k_out_dir" ${k_gcc} ${k_clang} ${k_export}"
+msg "Export:"
+for i in $k_export; do
+	inf "export $i"
+	export $i
+done
+echo ""
+
+BUILD_START=$(date +"%s")
+eval "$(declare -f inf | sed 's/^inf/show/')"
+
+main(){
+
+	cd "${k_dir}"
+	mkdir -p "${k_out_dir}"
+
+	#- make kernel version
+	[ "${k_makeKernVerSig:-0}" -eq 1 ] && show "make O=$k_out_dir kernelversion"
+	[ "${k_makeKernVerSig:-0}" -eq 1 ] && ( make O=$k_out_dir kernelversion; echo "" )
+
+	#- skip make exec & exit 0
+
+	#- rm -rf $out
+	[ "${k_cleanOutSig:-0}" -eq 1 ] && show "rm -rf "${k_out_dir}"; mkdir -p "${k_out_dir}""
+	[ ${norunSig:-0} -ne 1 ] && [ "${k_cleanOutSig:-0}" -eq 1 ] && ( rm -rf "${k_out_dir}"; mkdir -p "${k_out_dir}" )
+
+	#- make clean
+	[ "${k_cleanSig:-0}" -eq 1 ] && show "make O=$k_out_dir clean -j${k_nproc}; make O=$k_out_dir mrproper -j${k_nproc}"
+	[ ${norunSig:-0} -ne 1 ] && [ "${k_cleanSig:-0}" -eq 1 ] && ( make O=$k_out_dir clean -j${k_nproc}; make O=$k_out_dir mrproper -j${k_nproc}; echo "" )
+
+	#- make config
+	show "make O=$k_out_dir ARCH=$k_arch $k_gcc $k_clang ${k_conf} ${k_vconf} ${k_dconf} ${k_sconf} ${k_slconf} $k_verbose -j${k_nproc}"
+	[ ${norunSig:-0} -ne 1 ] && ( make O=$k_out_dir ARCH=$k_arch $k_gcc $k_clang ${k_conf} ${k_vconf} ${k_dconf} ${k_sconf} ${k_slconf} $k_verbose -j${k_nproc}; echo "" ) 
+
+	#- make menuconfig
+	[ "${k_menuconfigSig:-0}" -eq 1 ] && show "make menuconfig $k_verbose"
+	[ ${norunSig:-0} -ne 1 ] && [ "${k_menuconfigSig:-0}" -eq 1 ] && ( make menuconfig $k_verbose; echo "" )
+
+	#- make <-all->
+	show "make O=$k_out_dir ARCH=$k_arch $k_gcc $k_param -j${k_nproc}"
+	[ ${norunSig:-0} -ne 1 ] && (make O=$k_out_dir ARCH=$k_arch $k_gcc $k_param -j${k_nproc})
+
+}
+
+([ ${norunSig:-0} -ne 1 ] && sinf "Build initiated.." || salrt "Dry run initiated..")
+hr
+echo ""
+
+main
+build_return=$?
+[ ${norunSig:-0} -eq 1 ] && build_return=0
+
+echo ""
+hr
+
+BUILD_TIME=$(($(date +"%s") - ${BUILD_START}))
+min=$((BUILD_TIME / 60)); sec=$((BUILD_TIME % 60)); unit="minute"
+[[ $min -gt 1 ]] && unit="minutes"
+
+notify
+
+[ ${build_return:-1} -eq 0 ] && \
+([ ${norunSig:-0} -ne 1 ] && inf "Build took ${min}.$(printf '%02d' "$sec") $unit.." || salrt "Dry run took ${min}.$(printf '%02d' "$sec") $unit.."  ) || \
+swrn "Build failed, took ${min}.$(printf '%02d' "$sec") $unit.."

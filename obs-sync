@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+if [ -d /x-obs/ ]; then cd /x-obs/
+elif [ -d ~/x-obs/ ]; then cd ~/x-obs/
+elif [ -d /x/obs/ ]; then cd /x/obs/
+elif [ -d ~/x/obs/ ]; then cd ~/x/obs/
+else
+    echo "Dir 'obs' not found!"
+    exit 1
+fi
+
+gitx sync branch main

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+termux-setup-storage
+pkg install -y tsu curl iproute2 openssh ranger rsync git zsh fzf tmux cloudflared glow
+
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+
+git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
+git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+git clone https://github.com/TamCore/autoupdate-oh-my-zsh-plugins ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/autoupdate
+# -add (update) to .zshrc:
+# plugins=(git zsh-autosuggestions zsh-syntax-highlighting autoupdate)
+
+# -Install powerlevel10k (zsh theme)
+git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k
+# -add (update) to .zshrc (to configure theme manually type 'p10k configure'):
+# ZSH_THEME="powerlevel10k/powerlevel10k"
+
+bash -c 'cd ~/.. && ln -sv usr/etc ./etc'
+rsync -av ~/x/asset/pconf/termux/root.d/ ~/../
+
+sys_root="${PREFIX}/.."
+conf_root="/x/asset/pconf/m/root.d"
+sh -c 'cd ${PREFIX}/..}/ && ln -svf usr/etc ./'
+
+remove=(
+    "$sys_root/etc/systemd/system/xclf.service"
+    "$sys_root/etc/ssh/sshd_config.d/xlvini-sshd.conf"
+    "$sys_root/etc/ssh/ssh_config.d/xlvini-hosts.conf"
+    "${sys_root}/etc/systemd/system/xclf.service"
+)
+for file in "${remove[@]}"; do echo "rm -vf $pair"; done
+
+declare -A links=(
+    ["${conf_root}/etc/profile.d/xlvini.bin.sh"]="${sys_root}/etc/profile.d/"
+    # ["${conf_root}/etc/sudoers.d/xlvini.bin"]="${sys_root}/rmf/etc/sudoers.d/"
+
+    ["${conf_root}/etc/ssh/sshd_config.d/xlvini.sshd.conf"]="${sys_root}/etc/ssh/sshd_config.d/"
+    ["${conf_root}/etc/ssh/ssh_config.d/xlvini.hosts.conf"]="${sys_root}/etc/ssh/ssh_config.d/"
+    ["/x/.conf/.ssh/authorized_keys"]="${sys_root}/root/.ssh/"
+    
+    # ["${conf_root}/etc/systemd/system/clfx.service"]="${sys_root}/etc/systemd/system/"
+    # ["${conf_root}/etc/grub.d/40_custom"]="${sys_root}/etc/grub.d/"
+)
+for src in "${!links[@]}"; do
+    dst="${files[$src]}"
+    ln -svf "$src" "$dst"
+done
+
+declare -A files=(
+    # ["${conf_root}/etc/grub.d/40_custom"]="${sys_root}/etc/grub.d/"
+)
+for cp_src in "${!links[@]}"; do
+    cp_dst="${files[$src]}"
+    cp -v "$cp_src" "$cp_dst"
+done
+
+rm -vf "${sys_root}/root/.ssh/authorized_keys"; cp -v "/x/.conf/.ssh/authorized_keys" "${sys_root}/root/.ssh/"
+rm -vf "~/.ssh/authorized_keys"; cp -v "/x/.conf/.ssh/authorized_keys" "~/.ssh/"

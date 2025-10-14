@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+BINARY_NAME="filebrowser"
+
+# Detect system architecture
+ARCH=$(uname -m)
+
+
+# Determine the correct binary to use
+case "$ARCH" in
+    x86_64)
+        BINARY="${BINARY_NAME}-amd" ;;  # AMD64
+    aarch64)
+        BINARY="${BINARY_NAME}-arm" ;;  # ARM64
+    *) 
+        BINARY="$BINARY_NAME" ;;  # Default binary
+esac
+
+# Locate the binary in the current directory or system PATH
+if [[ -x "./$BINARY" ]]; then
+    BINARY="./$BINARY"
+elif [[ -x "$(command -v "$BINARY")" ]]; then
+    BINARY="$(command -v "$BINARY")"
+else
+    echo "Error: $BINARY not found or not executable." >&2
+    exit 1
+fi
+
+# Execute the correct binary with any passed arguments
+exec "$BINARY" "$@"

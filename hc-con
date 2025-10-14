@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+#@info convert raw cap/pcap/pcapng to "hc22000" & filter details.. 
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+
+
+msg "seperating raw details from $(echo $(ls|grep *.pcapng*))"
+#- setting extension name for --raw outputs--
+r=xraw
+sudo hcxpcapngtool -o hash.hc22000 -E essid.$r -R essid-probe.$r -I id.$r -U username.$r -D dev-info.$r  *.pcapng* *.cap*
+
+#- setting extension name for --filtered outputs--
+f=xfil
+sudo hcxhashtool -L essid.$f --info=info.$f --info-vendor-ap=vendor-ap.$f --info-vendor-client=vendor-client.$f -i *.hc22000*

@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+usage(){
+	cat <<EOF
+	-n	Name for the systemd service
+	-d 	Description of the service
+	-c 	Command to be executed by the service
+	-O 	Define a custom service path destination
+	-e 	Enable service
+	-r 	restart service
+	
+	--After <value>
+	--Wants <value>
+	--Requires <value>
+	--User <value>
+	--Group <value>
+	--Type <value>
+	--Restart <value>
+	--RestartSec <value>
+	--LogNull 
+
+	-p 	Select 1-5
+		1 /etc/systemd/system
+			# This is the primary directory for system-wide service unit files.
+			# Placing custom .service files here means they will be available to all users on the system.
+			# This directory should be used for service files that are meant to apply across the entire system.
+
+		2 /usr/local/lib/systemd/system/
+			# This directory is meant for locally-installed service unit files, which are not part of the system's package management.
+			# Placing .service files here is useful when you have software installed from source or third-party sources.
+
+		3 /usr/lib/systemd/system # /lib/systemd/system
+			# Similar to '/etc/systemd/system/', this directory is used for system-wide service unit files.
+			# The difference is that files placed here are typically provided by system packages and might get overwritten during package updates.
+			# Custom service files should generally be placed in '/etc/systemd/system/' to avoid conflicts with package updates	
+
+		4 ~/.config/systemd/user/
+			# This directory is used for per-user service unit files.
+			# You can place custom .service files here for services meant to be managed at the user level.
+			# These services are started when the user logs in
+
+		5 /run/systemd/system
+			# This directory contains runtime service unit files.
+			# Service units created here are temporary and are not preserved across reboots.
+			# Used for transient services or services managed by system components.	
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		-n )# Name for <systemd>.service file
+			sysdName="${2}"
+			shift 2
+			;;
+		-p )# Path to place the service file in, enter 1,2,3
+			sysdPathId="${2}"
+			shift 2
+			;;
+		-O )# Define a custom service destination, USE CAREFULLY
+			sysdPathC="${2}"
+			shift 2
+			;;
+		-e )# Enable service
+			sysdEnSig="1"
+			shift
+			;;
+		-d )# Disable service
+			sysdDisSig="1"
+			shift
+			;;
+		-r )# restart service
+			sysdStartSig="1"
+			shift
+			;;
+		--edit )# Edit the service file in editor after applying arguments
+			editSig=1
+			shift
+			;;
+		--verify ) #display the content of service after succesfull creation
+			verifySig=1
+			shift
+			;;
+		--Desc )# Description of the service
+			sysdDescription="${2}"
+			shift 2
+			;;
+		--After )# for Unit After
+			sysdAfter="${2}"
+			shift 2
+			;;
+		--Wants )# for Unit Wants
+			sysdWants="${2}"
+			shift 2
+			;;
+		--Requires )# for Unit Requires
+			sysdRequires="${2}"
+			shift 2
+			;;
+		--User )# defing service user
+			sysdUser="${2}"
+			shift 2
+			;;
+		--Group )# defing service user
+			sysdGroup="${2}"
+			shift 2
+			;;		
+		--Type )# oneshot,
+			sysdType="${2}"
+			shift 2
+			;;		
+		--Exec )# comand that the service file will execute
+			sysdExec="${2}"
+			shift 2
+			;;
+		--Restart )# define when to restart service <always,on-failure>
+			sysdRestart="${2}"
+			shift 2
+			;;
+		--RestartSec ) #define between restarts
+			sysdRestartSec="${2}"
+			shift 2
+			;;
+		--LogNull ) # do not log the logs
+			sysdLogNull=1
+			shift
+			;;
+		-h | --help)
+            usage
+            exit 0
+            ;;
+        :)
+            alert "Error: Option -$2 requires an argument."
+            usage
+            exit 1
+            ;;
+        ?)
+            alert "Error: Invalid option -$2."
+            usage
+            exit 1
+            ;;
+	esac
+done
+
+if [[ -z $sysdName ]];then
+	wrn "Name of service is required \"-n\""
+	usage
+	exit 1
+fi;
+[[ -n $sysdExec ]] || wrn "$sysdName has no work to do.. No commands specified to execute.."  
+
+# Possible available systemd.service paths 
+sysdPaths=(
+	/etc/systemd/system
+	/usr/local/lib/systemd/system/
+	/usr/lib/systemd/system
+	~/.config/systemd/user/
+	/run/systemd/system
+)
+
+sysdName="${sysdName}.service"
+sysdPath="${sysdPathC}${sysdPaths[${sysdPathId:-0}]}"
+sysdDest="${sysdPath}/${sysdName}"
+
+
+inf "Generating Service $sysdDest"
+cat << EOF >$sysdDest || err "Service generation failed $sysdDest"
+[Unit]
+Description=${sysdDescription:-$sysdName}
+After=network-online.target ${sysdAfter}
+Wants=network-online.target ${sysdWants}
+$(if [[ -n $sysdRequires ]]; then cat <<sysdRequires_EOF 
+Requires=${sysdRequires}
+sysdRequires_EOF
+fi)
+
+
+[Service]
+$(if [[ -n $sysdUser ]]; then cat <<sysdUser_EOF
+User=${sysdUser}
+sysdUser_EOF
+fi)
+$(if [[ -n $sysdGroup ]]; then cat <<sysdGroup_EOF
+Group=${sysdGroup}
+sysdGroup_EOF
+fi)
+Type=${sysdType:-simple}
+ExecStart=${sysdExec}
+Restart=${sysdRestart:-always}
+RestartSec=${sysdRestartSec:-5}
+$(if [[ $sysdLogNull -eq 1 ]]; then cat <<sysdLogNull_EOF
+StandardOutput=null
+StandardError=null
+sysdLogNull_EOF
+fi)
+
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd to make it aware of the new unit file
+inf "Reloading systemctl-daemon.."
+systemctl daemon-reload
+# -Disable service on signal
+if [[ $sysdDisSig -eq 1 ]]; then 
+	inf "Disabing $sysdName.."
+	systemctl disable $sysdName; 
+fi
+# -enable service on signal
+if [[ $sysdEnSig -eq 1 ]]; then 
+	inf "Enabling $sysdName.."
+	systemctl enable $sysdName; 
+fi
+# -start service on signal
+if [[ $sysdStartSig -eq 1 ]]; then 
+	inf "Restarting $sysdName.."
+	systemctl restart $sysdName; 
+fi
+# cat to terminal
+if [[ $verifySig -eq 1 ]]; then
+	inf "Content --START-- of $sysdDest"
+	cat $sysdDest
+	inf "Content --END-- of $sysdDest"
+fi
+# edit the file
+if [[ $editSig -eq 1 ]]; then
+	inf "Edit mode $sysdDest"	
+	open $sysdDest || nano $sysdDest
+fi

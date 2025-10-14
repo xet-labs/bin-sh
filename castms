@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# @inf: cast or receive messages on specified port
+
+recv() {
+	port=$1
+	socat -u udp-recv:${port} -	
+}
+
+cast() {
+	brd=$1
+	#port=
+	socat -u - udp-sendto:$brd,broadcast 	
+}
+while getopts r:b: opt; do
+	case $opt in
+		r ) # receive message
+			recv "$OPTARG"
+			;;
+		b ) # broadcast message
+			cast "$OPTARG"
+			;;
+	esac
+done

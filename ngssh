@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+
+
+#- default ssh port id in /etc/ssh/sshd_config
+#sshPort=$(grep -iw "^port"  /etc/ssh/sshd_config|awk '{print $2}')
+
+
+# --=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=---FUNCTIONS---=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--
+
+ngload(){
+	ngrok authtoken $ng_authtoken
+	ngrok tcp $ssh_port
+	echo -e "ngssh started at: $ssh_port \nwith token: $ng_authtoken"
+}
+
+
+port_ng(){
+
+		if [ $OPTARG>=1 ]
+			then
+				echo -e "--received port configs: $#"
+					
+				
+				echo "port: $OPTARG"
+				if [ $#>1 ]
+					then
+					echo 'starting ng_ssh server on more than one ports'
+				fi
+		fi
+			
+		#- loading defaults
+		echo 'loading defaults..'
+		#ng_start	
+}
+
+
+
+ng_kill() {
+	
+	serv=$(ps -ef | grep 'ngrok tcp'|grep -v 'grep')
+	if [[ -n $serv ]]
+		then
+			echo -e '\e[1;32mngssh servers to stop: \e[0m'
+			kill -9 $(ps -ef | grep 'ngrok tcp'|grep -v 'grep'|awk '{print $2}')
+			echo -e "\e[1;31mstopped all ngssh servers..\e[0m"
+		else
+			echo -e 'no servers to stop..'
+	fi
+}
+
+
+sshDefPort() {
+#- default ssh port id in /etc/ssh/sshd_config
+sshPortLocn=/etc/ssh/sshd_config
+sshPort=$(grep -iw "port"  $sshPortLocn | awk 'FNR==1 {print $2}')
+
+sshPortFreqa=$(grep -iw "port"  "$sshPortLocn"|wc -l)
+sshPorta=$(grep -iw "port"  "$sshPortLocn"|awk '{print $2}' )
+#echo "#! $sshPortFreqa"
+sshPortFrequ=$(grep -iw "^#port"  "$sshPortLocn"|wc -l)
+sshPortu=$(grep -iw "^#port"  "$sshPortLocn"|awk '{print $2}' )
+#echo "# $sshPortFrequ"
+sshPortFreqd=$(grep -iw "^port"  "$sshPortLocn"|wc -l)
+sshPortd=$(grep -iw "^port"  "$sshPortLocn"|awk '{print $2}' )
+#echo "! $sshPortFreqd"
+
+#- filtering multiple ports
+#- for "#" commented ports only
+if [[ $sshPortFreqd == 0 ]];then
+	if [[ $sshPortFrequ == 1 || $sshPortFrequ == 0 ]];then
+		echo -e "--no defined ports '$sshPortFrequ' in $sshPortLocn\n--ports: $(echo $sshPortu) "
+		sshPort=22
+		echo -e "--global default selected"
+	elif [[ $sshPortFrequ > 1 ]];then
+ 		echo -e "!!warning\n--found multiple '$sshPortFrequ' commented ports in $sshPortLocn\n--ports: $(echo $sshPortu) "
+		sshPort=22
+		echo -e "--global default selected"
+	fi
+fi
+#- for defined ports only	
+if [[ $sshPortFrequ == 0 ]]; then
+	if [[ $sshPortFreqd > 1 ]]; then
+		echo -e "!!warning\n--found multiple '$sshPortFreqd' defined ports in $sshPortLocn\n--ports: $(echo $sshPortd) "
+		sshPort=$(grep -iw "^port"  $sshPortLocn | awk 'FNR==1 {print $2}')
+	fi
+fi
+#- for both defined & undefined ports
+if [[ $sshPortFrequ -ge 1 ]];then
+	if [[ $sshPortFreqd -ge 1 ]];then
+		echo -e "!!warning\n--found multiple '$sshPortFreqa' ports in $sshPortLocn\n--ports: $(echo $sshPorta) "
+		sshPort=$(grep -iw "^port"  $sshPortLocn | awk 'FNR==1 {print $2}')
+	fi
+fi
+echo -e "--default-port: $sshPort"
+}
+
+# --=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=---FUNCTIONS-END!!---=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--=--
+
+
+
+#- --parse defined iterative args
+
+while getopts ":hkt:" opt;
+do
+	case $opt in
+		
+		h) #print help msg
+			echo "help msg to be constructed !!";;
+			
+		p) #- start server func
+			port_ng
+			exit;;
+
+		k) #- kill ng server
+			ng_kill;;
+
+		t) #- exec test module
+			test ;;
+			
+		\?) # Invalid option
+			echo "Error: 1.1"
+			echo "--Invalid option 🥱️"
+			exit;;
+						
+		*) # warn alien commands
+			echo "alien command detected 🤖️" 
+			
+
+	esac;
+done;
+
+
+while getopts pa: opt2;
+do
+	case $opt2 in
+
+		a);;
+			
+		\?) # Invalid option
+			echo "Error: 1.2"
+			echo "--Invalid option"
+			exit;;			
+	esac;
+done;
+
+
+#- loading defaults
+if [[ $# == 0 ]]
+then
+	echo 'loading defaults..'
+	#ng_kill ;
+	sshDefPort
+	ng_authtoken='2IpJhFmNVdYo3Ee0I4yMOJU1mhg_59ceutwnVQGVSU4dLeq1m'
+	ssh_port=$sshPort
+	ngload
+fi
+
+

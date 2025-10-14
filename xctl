@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+
+
+# ------ conf ------
+
+appPath="$(readlink -f "${BASH_SOURCE[0]}")";
+appName="${appPath##*/}"
+appDir=$(dirname "$appPath")
+appMods="$appDir/$appName.d/*"
+
+
+# ------ HELPERS ------
+cc=()
+out() {
+    local c="$1"
+    local msg="$2"
+    local mode="$3"
+    local cx="$4"
+
+    # Push new color to front of stack
+    cc=("$c" "${cc[@]}")
+
+    # echo -e "\nc3=${cc[3]:-} c2=${cc[2]:-} c1=${cc[1]:-} c0=${cc[0]}\n"
+
+    local x="${cc[$cx]:-\e[0m}"
+
+    # Handle output modes
+    case "$mode" in
+        n) printf "${c}${msg}\e[0m" ;;
+
+        p) printf "${c}${msg}${x}" ;;
+        pc) printf "${x}${msg}${x}" ;;
+        
+        pn) printf "${c}${msg}${x}\n" ;;
+        *) printf "${c}${msg}\e[0m\n" ;;
+    esac
+}
+
+pout() { out "${2}" "${1}" "p" "$3"; }
+
+msg() { out "\e[0;36m" "${1}" "${2}" "$3"; }
+inf() { out "\e[0;2m" "${1}" "${2}" "$3"; }
+alert() { out "\e[0;35m" "${1}" "${2}" "$3"; }
+wrn() { out "\e[0;33m" "${1} !!" "${2}" "$3"; return 1; }
+err() { out "\e[0;31m\n" "${1} !!" "${2}" "$3"; exit 1; }
+
+
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		--sync) # auto mode
+			autoMode=1
+			shift
+			;;
+		--osarc|--osarchive|osarc|osarchive)
+			$appMods/osarc $@
+			shift $#
+			;;
+		-h | --help)
+            echo -e "\nBe self-dependent !!"
+            exit 0
+            ;;
+        :)
+            alert "Error: Option $1 requires an argument."
+            usage
+            exit 1
+            ;;
+        *)
+            alert "Error: Invalid option $1"
+            usage
+            exit 1
+            ;;
+	esac
+done
+#shift $(( OPTIND - 1 ))
+(( EUID == 0 )) || err "This script requires elevated privileges"
+
+rsync --exclude={"/dev/*","/lost+found","/media/*","/mnt/*","/proc/*","/run/*","/sys/*","/tmp/*","/var/cache/apt/archives/*","/var/lib/apt/lists/*","/var/log/*","/xlvini/mnt/*","xlvini/mnt/*"} $@
+
+
+#!/bin/bash
+
+# Function to display help for the sync feature
+function sync_help() {
+    echo "Usage: xctl sync [OPTIONS]"
+    echo "Options:"
+    echo "  -h, --help     Show help for sync feature"
+    echo "  --mode MODE    Set sync mode (e.g., fast, slow)"
+    # Add more options as needed
+}
+
+# Function to handle the sync feature
+function sync() {
+    local mode=""
+    
+    while [[ "$#" -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                sync_help
+                exit 0
+                ;;
+            --mode)
+                mode="$2"
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                sync_help
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    echo "Syncing with mode: $mode"
+    # Add your sync logic here
+}
+
+# Function to display help for the connect feature
+function connect_help() {
+    echo "Usage: xctl connect [OPTIONS]"
+    echo "Options:"
+    echo "  -h, --help     Show help for connect feature"
+    echo "  --host HOST    Specify the remote host"
+    echo "  --port PORT    Specify the port"
+    # Add more options as needed
+}
+
+show_help() {
+    echo "Usage: $(basename "$0") <command> [args...]"
+    echo
+    echo "Available commands:"
+    
+    for file in "$SCRIPT_DIR"/*; do
+        [[ -x "$file" && -f "$file" ]] && echo "  $(basename "$file")"
+    done
+
+    echo
+    echo "You can also use '--<command>' as an alternative syntax."
+    echo "Example: $(basename "$0") --backup arg1 arg2"
+    exit 1
+}
+
+# Ensure directory exists and contains executables
+[[ -d "$SCRIPT_DIR" ]] || { echo "Error: Directory '$SCRIPT_DIR' not found!"; exit 1; }
+[[ -z "$1" ]] && { echo "Error: No command provided!"; show_help; }
+
+cmd="$1"; shift  # Extract first argument, remaining are script arguments
+
+# Build a lookup table for executables
+declare -A cmd_map
+for file in "$SCRIPT_DIR"/*; do
+    [[ -x "$file" && -f "$file" ]] && cmd_map["$(basename "$file")"]="$file"
+done
+
+# Check if command exists in map and execute it
+[[ ${cmd_map[$cmd]} ]] && exec "${cmd_map[$cmd]}" "$@"
+[[ ${cmd_map[${cmd#--}]} ]] && exec "${cmd_map[${cmd#--}]}]" "$@"
+
+# No match found, show help
+echo "Error: Command '$cmd' not found!"
+show_help
+
+# Main function to handle subcommands
+function main() {
+    case $1 in
+        sync)
+            shift
+            sync "$@"
+            ;;
+        connect)
+            shift
+            connect "$@"
+            ;;
+        -h|--help)
+            echo "Usage: xctl [COMMAND] [OPTIONS]"
+            echo "Commands:"
+            echo "  sync       Sync feature"
+            echo "  connect    Connect to remote asset"
+            # Add more commands as needed
+            ;;
+        *)
+            echo "Unknown command: $1"
+            echo "Usage: xctl [COMMAND] [OPTIONS]"
+            exit 1
+            ;;
+    esac
+}
+
+# Entry point
+if [[ "$#" -lt 1 ]]; then
+    echo "Usage: xctl [COMMAND] [OPTIONS]"
+    exit 1
+fi
+
+main "$@"

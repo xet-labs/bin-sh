@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+grub-reboot "$(grep -E "menuentry '.*'" /boot/grub/grub.cfg | cut -d"'" -f2 | fzf)" && sleep 1 && reboot

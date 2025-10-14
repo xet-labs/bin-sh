@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+inf2() { out "\n\e[0;2m" "$@.."; }
+die() { out "\e[0;2m--" "$@"; exit 1; }
+
+network() {
+	# default sequence to manipulate net-manager state
+	#- 1=wpa_supplicant, 2=NetworkManager, 3=networking
+	defaultSeq=123
+	
+	status=$1
+	inf "status:$1"
+	seq=$2
+	if [[ $seq == '' ]];then
+		seq=$defaultSeq
+	#inf "defaulting to $seq.."
+	fi
+	
+	i=0
+	while [ $i -lt ${#seq} ] ; 
+	do 
+		order=$(echo ${seq:$i:1}) ; 
+		i=$((i+1)) 
+		if [[ $order == 1 ]] ;then sudo systemctl $status wpa_supplicant&&inf "probing:wpa_supplicant"; fi
+		if [[ $order == 2 ]] ;then sudo systemctl $status NetworkManager&&inf "probing:NetworkManager"; fi
+		if [[ $order == 3 ]] ;then sudo systemctl $status networking&&inf "probing:networking"; fi
+	done;
+	
+}
+
+while getopts "ske:d:" opt ;
+do
+	case $opt in
+	s)#start network
+	#echo -e "opt:${OPTARG}"
+		network restart ||die "!!couldnt restart network"
+		inf2 "network restarted"
+		;;
+	
+	k)#stop network
+		network stop ||die "!!couldnt stop network"
+		inf2 "network stopped"
+		;;
+	e)#start network
+	#echo -e "opt:${OPTARG}"
+		opt=${OPTARG}
+		network restart $opt||die "!!couldnt restart network"
+		inf2 "network restarted"
+		;;
+	
+	d)#stop network
+		opt=${OPTARG}
+		network stop $opt||die "!!couldnt stop network"
+		inf2 "network stopped"
+		;;
+	esac
+done

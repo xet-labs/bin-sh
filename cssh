@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+args=()
+for arg in "$@"; do
+    if [[ "$arg" =~ ^([a-zA-Z0-9_-]+\.)?xi\.com$ ]]; then
+        args+=("${arg/xi.com/xetindustries.com}")
+    else
+        args+=("$arg")
+    fi
+done
+
+if command -v cloudflared &>/dev/null; then
+    ssh -o ProxyCommand='cloudflared access ssh --hostname %h' \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "${args[@]}"
+elif command -v cloudflared &>/dev/null; then
+    ssh -o ProxyCommand='cloudflared access ssh --hostname %h' \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        "${args[@]}"
+else
+    inf "Aborting... No Cloudflared binary detected."
+fi
+

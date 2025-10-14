@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+# install necessary dependencies
+sudo apt update
+sudo apt install apache2 ghostscript libapache2-mod-php php php-bcmath php-curl php-imagick php-intl php-json php-mbstring php-xml php-zip #mysql-server php-mysql
+
+# config wp files
+sudo mkdir -p /srv/www
+sudo chown www-data: /srv/www
+curl https://wordpress.org/latest.tar.gz | sudo -u www-data tar zx -C /srv/www
+
+# -Configure Apache for WordPress
+# Define config name
+config="${site_domain}.${site_port}.conf"
+config_path="${config_dir}/${config}"
+
+inf "generating config $config_path"
+# Generate Apache site configuration
+cat <<EOF > "$config_path"
+Listen ${site_port}
+
+<VirtualHost *:${site_port}>
+    ServerName ${site_domain}
+    ServerAlias www.${site_domain}
+    DocumentRoot ${site_dir}
+
+    <Directory ${site_dir}>
+        Options +FollowSymlinks +Indexes
+        AllowOverride All
+        Require all granted
+
+        SetEnv HOME ${site_dir}
+        SetEnv HTTP_HOME ${site_dir}
+    </Directory>
+    <Directory ${wpfolder:-'/var/www/'}wordpress/wp-content>
+        Options FollowSymLinks
+        Require all granted
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${config}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${config}-access.log combined
+</VirtualHost>
+EOF
+
+sudo a2ensite $config
+sudo a2enmod rewrite
+sudo a2dissite 000-default
+sudo service apache2 reload
+
+# -configure sql db
+sudo mysql -u root<<EOF
+CREATE DATABASE wordpressdb;
+CREATE USER wordpress@localhost IDENTIFIED BY '<your-password>';
+GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER  ON wordpressdb.* TO wordpress@localhost;
+FLUSH PRIVILEGES;
+quit
+EOF
+
+
+# -Configure WordPress to connect to the database
+# -copy the sample configuration file to wp-config.php:
+sudo -u www-data cp /srv/www/wordpress/wp-config-sample.php /srv/www/wordpress/wp-config.php
+
+# -Next, set the database credentials in the configuration file (do not replace database_name_here or username_here in the commands below. Do replace <your-password> with your database password.):
+sudo -u www-data sed -i 's/database_name_here/wordpress/' /srv/www/wordpress/wp-config.php
+sudo -u www-data sed -i 's/username_here/wordpress/' /srv/www/wordpress/wp-config.php
+sudo -u www-data sed -i 's/password_here/<your-password>/' /srv/www/wordpress/wp-config.php
+
+# -find the following 
+:<<Comment
+define( 'AUTH_KEY',         'put your unique phrase here' );
+define( 'SECURE_AUTH_KEY',  'put your unique phrase here' );
+define( 'LOGGED_IN_KEY',    'put your unique phrase here' );
+define( 'NONCE_KEY',        'put your unique phrase here' );
+define( 'AUTH_SALT',        'put your unique phrase here' );
+define( 'SECURE_AUTH_SALT', 'put your unique phrase here' );
+define( 'LOGGED_IN_SALT',   'put your unique phrase here' );
+define( 'NONCE_SALT',       'put your unique phrase here' );
+Comment
+# Delete those lines (ctrl+k will delete a line each time you press the sequence). 
+# Then replace with the content of https://api.wordpress.org/secret-key/1.1/salt/. 
+# (This address is a randomiser that returns completely random keys each time it is opened.) 
+# This step is important to ensure that your site is not vulnerable to “known secrets” attacks.
+
+

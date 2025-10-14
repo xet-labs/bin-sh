@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+(( EUID == 0 )) || err "This script requires elevated privileges"
+
+smsg "perfoming fix for usb undetect"
+siinf "adding \"vboxusers\" to \"$LOGNAME\" group.."
+usermod -aG vboxusers $LOGNAME
+
+smsg "perfoming fix for $(inf "<vm_instance> terminated unexpectedly during startup with exit code 1 (0x1)..")"
+inf "reconfiguring owner \"root:root\" for \"/usr, /usr/lib, /usr/lib/virtualbox\""
+chown root:root /usr
+chown root:root /usr/lib
+chown root:root /usr/lib/virtualbox
+
+smsg "loading drivers"
+sudo modprobe vboxdrv vboxnetflt vboxnetadp vboxpci

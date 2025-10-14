@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+
+exec "$scriptDir/xbin" glow "${@}"

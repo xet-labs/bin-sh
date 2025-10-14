@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+out() { if [[ $verbose != 0 ]];then printf "$1$2\e[0m\n"; fi }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+user_dir=$PWD
+
+IDF_BASE="$HOME/devhw"
+IDF_PATH="$IDF_BASE/esp-idf"
+IDF_FILE_export="$IDF_PATH/export.sh"
+
+#- defaults
+def_setupMods="esp32"
+def_alias_IDF_exp="get-idf"
+def_alias_IDF=idf
+req_tools=python3.11-venv
+
+IDF_pkg(){
+	[[ $IDF_setupSig == 1 ]] && return
+	
+	declare -A OS_cmd=(
+		[debian]="apt install git wget flex bison gperf  pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0"
+
+		[fedora]="yum -y update && yum -y install git wget flex bison gperf python3 cmake ninja-build ccache dfu-util libusbx"
+
+		[arch]="pacman -S --needed gcc git make flex bison gperf python cmake ninja ccache dfu-util libusb"
+	)
+
+	# Detect the Linux distribution
+	if [ -f /etc/os-release ]; then
+		# Use /etc/os-release to get distribution information
+		source /etc/os-release
+
+		OS_detected=${ID_LIKE:-$ID}
+
+		msg "Updating & Installing required packages.."
+		inf "OS: $OS_detected : $(uname -v)"
+		# Check if the detected distribution is in the supported list
+		status=1
+		if [[ -n $OS_detected ]]; then
+			case $OS_detected in
+		        "debian" | "ubuntu")
+					sudo bash -c "${OS_cmd[debian]}$([[ $yesSig == 1 ]]&& echo -n ' -y ')"
+					status=0
+					;;
+		        "arch")
+					sudo bash -c "${OS_cmd[arch]}"
+					status=0
+					;;
+		        "fedora" | "centos" | "rhel")
+					sudo bash -c "${OS_cmd[fedora]}"	
+					status=0
+					;;
+		  	esac
+		  if [[ $status != 0 ]]; then alert "unsupported os $OS_detected"; return 1; fi
+		fi
+	else
+		alert "Unable to detect the Linux distribution."
+		return 1
+	fi
+}
+
+IDF_clone(){
+	[[ $IDF_setupSig == 1 ]] && return
+	
+	msg "Cloning IDF from git to $IDF_PATH"
+	if [[ ! -e $IDF_PATH/tools/idf_tools.py ]]; then
+		[[ ! -d "$IDF_BASE" ]] && mkdir -p "$IDF_BASE";
+		cd "$IDF_BASE"
+		# Clone the main repository with a limited history and excluding blob contents
+		git clone --recursive --filter=blob:none https://github.com/espressif/esp-idf.git
+
+		# Navigate into the cloned repository and Initialize and update submodules
+		# cd $IDF_PATH
+		# git submodule update --init --recursive
+
+	elif  [[ -e $IDF_PATH/tools/idf_tools.py && $forceSig == 1 ]]; then
+		alert "Pre-installed IDF asset detected.. proceding anyway"
+		cd "$IDF_PATH"
+		git fetch --tags
+		git fetch --all
+		git clean -xdf
+
+		git pull
+	else
+		alert "Pre-installed IDF asset detected.. skipping git clone"
+		inf "use -f to force setup"
+		return
+	fi
+}
+
+
+IDF_install(){
+	[[ $IDF_setupSig == 1 ]] && returnn
+	
+	msg "Installing IDF to $USER:$IDF_PATH"
+	cd "$IDF_PATH"
+	if [[ $setupAltsrc = 1 ]]; then
+		#- prefer the Espressif download server when installing tools
+		export IDF_GITHUB_ASSETS="dl.espressif.com/github_assets"
+	fi
+
+	setupMods=${setupMods:-$def_setupMods}
+	( ./install.sh "${setupMods}" ) || ( ./install.fish "${setupMods}" )
+}
+
+IDF_aliases(){
+	[[ $IDF_setupSig == 1 ]] && return
+
+
+	local files_to_append=(".bashrc" ".zshrc" ".profile")
+	local alias_IDF_exp=${alias_IDF_exp:-$def_alias_IDF_exp}
+	local alias_IDF=${alias_IDF:-$def_alias_IDF}
+
+	echo -e $(pmsg "Setting up IDF Export aliases: "; echo "$alias_IDF_exp")
+	inf "to run $alias_IDF_exp please restart the shell be launching th new shell.."
+	
+	for file in "${files_to_append[@]}"; do
+		local destn="$HOME/$file"
+		if [[ -f $destn ]]; then
+			inf "appending to $destn"
+			cat << EOF >> "$destn"
+
+#- user-added aliases
+alias $alias_IDF_exp=". \$HOME/esp/esp-idf/export.sh && clear"
+alias $alias_IDF=idf.py
+EOF
+		fi
+	done
+}
+
+IDF_aliases() {
+    if [[ $IDF_setupSig == 1 ]]; then
+        return
+    fi
+
+    local files_to_append=(".bashrc" ".zshrc" ".profile")
+    local alias_IDF_exp=${alias_IDF_exp:-$def_alias_IDF_exp}
+    local alias_IDF=${alias_IDF:-$def_alias_IDF}
+    
+    echo "$(pmsg "Setting up IDF Export aliases: ")$alias_IDF_exp"
+    inf "To run $alias_IDF_exp, please restart the shell by launching a new shell session."
+
+    for file in "${files_to_append[@]}"; do
+        if [[ -f "$HOME/$file" ]]; then
+            inf "Appending to $file"
+            {
+                echo ""
+                echo "# User-added aliases"
+                echo "alias $alias_IDF_exp='. \$HOME/esp/esp-idf/export.sh'"
+                echo "alias $alias_IDF=idf.py"
+            } >> "$HOME/$file"
+        fi
+    done
+}
+
+
+IDF_setup(){
+	local IDF_setupSig=0
+	IDF_pkg &&\
+	IDF_clone &&\
+	IDF_install &&\
+	IDF_aliases 
+}
+
+usage() {
+  cat <<EOF
+usage: ${0##*/} [command] [arguments...]
+
+-q	Operate quitely
+-y	Assume yes
+-d 	Define IDF export dir
+-e 	Export IDF to a new shell
+-E 	Export IDF to current sub -hell
+--setup 	Setup IDF in current user dir
+	-f | --force 	Force the installation
+	--setupAltsrc 		prefer the Espressif download server when installing tools
+	--setupMods 		install tools for dev-boards, default (esp32), 'all'  install tools for all supported boards 
+
+-h | --help 	Prints this help message
+
+
+$(pmsg "[run  specic Install step]")
+--idf-pkg	Install required packages
+--idf-clone 	Clone IDF files from git to user dir 
+--idf-install	Install IDF to user dir
+	--setupAltsrc 	prefer the Espressif download server when installing tools
+	--setupMods 	install tools for dev-boards, default (esp32), 'all'  install tools for all supported boards
+--idf-aliases	Setup aliases in ~/{".profile",".bashrc",".zshrc"}
+--idf-ipe | --install-python-env 	Insalls python-env..
+
+
+$(pmsg "[After IDF aliases setup]")
+	$def_alias_IDF_exp		Export IDF to current shell
+
+
+$(pmsg "[After IDF exported]")
+	cd <proj-dir>
+	idf set-target esp32 	#optional
+	idf menuconfig 			#optional
+	idf build
+	idf -p <path-to-dev> flash
+	idf -p <path-to-dev> monitor
+EOF
+}
+
+#- main
+while [[ $# -gt 0 ]]; do
+
+	case $1 in
+		-q)
+			verbose=0
+			shift
+			;;
+		-y)
+			yesSig=1
+			shift
+			;;	
+		-d)
+			IDFArgDir="$2"
+			IDFArgDirSig=1
+			shift
+			;;
+		-e) 
+			ExportIDFSig=1
+			shift
+			;;
+		-E) 
+			ExportIDFhereSig=1
+			shift
+			;;
+
+		--setup)
+			IDF_setupSig=1
+			shift
+			;;
+		-f | --force)
+			forceSig=1
+			shift
+			;;
+		--setupAltsrc)
+			setupAltsrc=1
+			shift
+			;;
+		--setupMods)
+			IDF_installSig=1
+			setupMods="$2"
+			shift 2
+			;;
+		--idf-ipe | --install-python-env)
+			inf "Insalling python-env.."
+			${IDF_PATH}/tools/idf_tools.py install-python-env
+			shift
+			;;
+		--idf-pkg)
+			IDF_pkgSig=1
+			shift;;
+		--idf-clone)
+				IDF_cloneSig=1
+			shift
+			;;
+		--idf-install)
+			IDF_installSig=1
+			shift
+			;;
+		--idf-aliases)
+			IDF_aliasesSig=1
+			shift
+			;;
+	   	-h | --help)
+            usage
+            exit 0
+            ;;
+        :)
+            alert "Error: Option \"$1\" requires an argument."
+            usage
+            exit 1
+            ;;
+        ?)
+            alert "Error: Invalid option \"$1\""
+            usage
+            exit 1
+            ;;
+   	    *)
+            alert "Error: Invalid option \"$1\""
+            usage
+            exit 1
+            ;;
+	esac
+
+	# if [[ $IDFArgDirSig != 1 ]] && echo "$1" | grep -E / >/dev/null 2>&1;then
+	# 	IDFArgDir=$1
+	# 	shift
+	# fi
+
+done
+
+IDFArgDir=${IDFArgDir:-$user_dir}
+
+
+
+#- perform operations for 
+runSig() {
+    local fun_name="$1"
+    local fun_sigVar="${fun_name}Sig"
+    
+    if [[ "${!fun_sigVar}" == 1 || "${!fun_sigVar,,}" == 1 ]]; then
+        # Execute the function
+        $fun_name
+    fi
+}
+
+runSig "IDF_setup"
+runSig "IDF_pkg"
+runSig "IDF_clone"
+runSig "IDF_install"
+runSig "IDF_aliases"
+
+
+
+#- EXPORT IDF ON COMMAND
+if [[ -f $IDF_PATH/export.sh ]];then
+	if [[ $ExportIDFSig == 1 ]]; then
+		inf "Exporting IDF to ${IDFArgDir:-'new shell'}.."
+		nohup x-terminal-emulator -e bash -c "cd \"$IDFArgDir\" && . ${IDF_PATH}/export.sh && clear && ( ( command -v idf.py>/dev/null ) && printf '\e[0;2mIDF exported to current shell env..\e[0m\n'; ) || printf '\e[0;35m!! IDF wasnt detected in current shell env..\e[0m\n'; exec $SHELL" >> /dev/null 2>&1 &
+	fi
+
+	if [[ $ExportIDFhereSig == 1 ]]; then
+		inf "Exporting IDF to ${IDFArgDir:-'new shell'}.."
+		. ${IDF_PATH}/export.sh
+	fi
+else
+	err "Aborting.. no path to '$IDF_PATH/export.sh'.."
+fi
+
+
+pinf ""
+( command -v idf.py>/dev/null && ( ( [[ $ExportIDFSig == 1 ]] && inf "IDF added to current sub-shell env.." ) || inf "IDF detected in current shell env.."; ) ) || ( alert "IDF wasnt detected in current shell env.."; inf "To export IDF to shell, run: "; (out "$def_alias_IDF_exp  |  \". ${IDF_FILE_export}\""; ))
+

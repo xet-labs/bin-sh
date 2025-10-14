@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#fix fonts error in wps-office
+
+
+#-- dest dir
+destDir=/usr/share/fonts/wps-kingsoft
+#fonts in 
+#-armory/-git/-github.com/-udoyen/wps-fonts/wps
+instFonts() {
+#-- main code
+	sudo mkdir $destDir -p
+	echo ----
+	echo $1
+	sudo cp -rv $1/* $destDir
+	echo ----
+	sudo chown -R $USER:$USER $destDir
+	sudo chmod -R o+rw,g+rw $destDir
+	sudo fc-cache -vfs
+}
+
+
+while getopts i:r opt;
+do
+	case $opt in
+		i) # install 
+			fonts=${OPTARG}
+			instFonts $fonts ;
+			exit;
+			;;
+		r) #remove all conf-fonts
+			sudo rm -rf $destDir;
+			exit;
+			;;
+	esac;
+done;
+
+

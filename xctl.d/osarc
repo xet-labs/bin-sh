@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+osarcDir="/media/xet/@bkp/osarc"
+osarc=(
+        "${osarcDir}/an.termux"
+        "${osarcDir}/an-arm.kali"
+        "${osarcDir}/mf.kali"
+        "${osarcDir}/mr-02.kali/rootfs"
+        "${osarcDir}/mx.kali"
+        "/"
+        "rmf.local:/"
+        "192.168.0.240:/"
+        "u0_a412@192.168.0.241:/data/data/com.termux/files"
+        "/media/xet/rmf"
+        )
+
+for arc in "${osarc[@]}"; do
+        cols=$(tput cols)
+        dash_line=$(printf '%*s' "$cols" '' | tr ' ' '-')
+        echo -e "\n$dash_line\n$arc\n$dash_line\n"
+        #sudo rm -vf "$dir/etc/ssh/ssh_config.d/xlvini-host.conf"
+        sudo xsync -avx --delete --exclude={"*/srv/*","srv/*"} /@.x/  "$arc/x/"
+        #sudo xsync -avx --exclude={"*/srv/*","srv/*"} /@.x/  "$arc/x/" & 
+done
+
+
+while [[ $# -gt 0 ]]; do
+        case $1 in
+        --sync) # auto mode
+                autoMode=1
+                shift
+                ;;
+        --osarc|--osarchive|osarc|osarchive)
+                $appMods/osarc $@
+                shift $#
+                ;;
+        -h | --help)
+            echo -e "\nBe self-dependent !!"
+            exit 0
+            ;;
+        :)
+            alert "Error: Option $1 requires an argument."
+            usage
+            exit 1
+            ;;
+        *)
+            alert "Error: Invalid option $1"
+            usage
+            exit 1
+            ;;
+        esac
+done

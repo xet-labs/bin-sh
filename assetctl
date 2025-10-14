@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# @inf: add a custom location to system path
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+err() { out "\e[0;31m!!" "$@"; exit 1;}
+
+profile_dest=/etc/profile.d
+sudoers_dest=/etc/sudoers.d
+
+#disable modules
+addPerm_pathsig=0
+
+
+# Check if the user has sudo privileges
+if [ "$(whoami)" != "root" ]; then
+    err "You must have sudo privileges to run this script."
+fi
+
+# Check if needed system path exists
+if [ ! -d $profile_dest ]; then
+    err "$profile_dest does not exist"
+fi
+
+if [ ! -d $sudoers_dest ]; then
+    err "$sudoers_dest does not exist"
+fi
+
+addPerm_path() {
+    # Check if input values are valid
+    if [ -z $src_path ] || [ -z $file_name ]; then
+        err "Invalid input values"
+    fi
+
+    # Check if file with same name already exists
+    if [ -f "$profile_dest/$file_name.sh" ] || [ -f "$sudoers_dest/$file_name" ]; then
+        read -p "A file with the same name already exists. Do you want to overwrite it? (y/n): " response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            msg "Operation cancelled"
+            exit 0
+        fi
+    fi
+    # configuring profiles.d
+    inf "Adding $file_name to $profile_dest/$file_name.sh"
+    echo -e 'export PATH=$PATH:'"$src_path" | tee "$profile_dest/$file_name.sh" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        err "Failed to write to $profile_dest/$file_name.sh"
+    fi
+
+    # Backup the sudoers file
+	sudo cp /etc/sudoers /etc/sudoers.bak
+    # configuring sudoers securepath
+	if ! grep -q "^Defaults.*secure_path.*$src_path" /etc/sudoers; then
+	    inf "Appending $src_path to secure_path in /etc/sudoers"
+	    # Escape any forward slashes in the new_path variable
+		new_path="${src_path//\//\\/}"
+
+		# Append new path to the secure_path section, enclosed in quotes
+		sed -i "/^Defaults\s\+secure_path/ s/\(\"$\)/:${new_path}\"/" /etc/sudoers >/dev/null 2>&1
+	else
+	    echo "$src_path is already in secure_path in /etc/sudoers"
+	fi
+	# Verify the syntax of the sudoers file
+	sudo visudo -c
+	# If syntax verification succeeds, overwrite the backup file with the new configuration
+	if [ $? -eq 0 ]; then
+	    sudo cp /etc/sudoers /etc/sudoers.new
+	    sudo mv /etc/sudoers.new /etc/sudoers
+	else
+	    # If syntax verification fails, restore the original sudoers file from the backup
+	    sudo cp /etc/sudoers.bak /etc/sudoers
+	fi
+	# Remove the backup file
+	sudo rm /etc/sudoers.bak
+    ----- 
+    :<<"comment"
+    inf "Adding $src_path to $sudoers_dest/$file_name"
+    echo -e "Defaults secure_path=\$secure_path:$src_path" | tee "$sudoers_dest/$file_name" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        err "Failed to write to $sudoers_dest/$file_name"
+    fi
+    chown -R root:root $sudoers_dest/$file_name
+    chmod -R 44 $sudoers_dest/$file_name 
+comment
+    msg "$src_path path added successfully!"
+    inf "Reboot to apply changes.."
+}
+
+remove_path() {
+    # Check if file with given name exists
+    if [ ! -f "$profile_dest/$file_name.sh" ] && [ ! -f "$sudoers_dest/$file_name" ]; then
+        err "No file with the given name exists"
+    fi
+
+    # Remove file from the target directories
+    rm -f "$profile_dest/$file_name.sh" "$sudoers_dest/$file_name"
+
+    msg "$src_path path removed successfully!"
+    inf "Reboot to apply changes.."
+}
+
+while getopts a:s:f:r opt; do
+    case $opt in
+    	a ) #enable addPerm_path module
+			addtype="$OPTARG"
+			;;
+        s ) # src directory with executeables to be added to sys path
+            src_path="${OPTARG}"
+            ;;
+        f ) # filename for the custom path, that will be responsible for adding path to system
+            file_name="${OPTARG}" 
+            ;;
+        r ) # remove added path
+            remove_path
+            exit 0
+            ;;
+    esac
+done
+
+# check if path to be added to system needs to be permanent or temp
+if [[ -n $addtype ]]; then
+	if [[ $addtype == 0 ]];then addPerm_path;
+	elif [[ $addtype == 1 ]]; then addRuser_path;
+	elif [[ $addtype == 2 ]]; then addUser_path;
+	elif [[ $addtype == 3 ]]; then addTemp_path;
+	else err "invalid value -a <0-3>"
+	fi;
+fi;

@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+
+
+# Default directories
+if [ -e /x ]; then
+    baseSrc="/x"
+    elif [ -e /xlvini ]; then
+    baseSrc="/xlvini"
+    elif [ -e "$HOME/x" ]; then
+    baseSrc="$HOME/x"
+    elif [ -e "$HOME/xlvini" ]; then
+    baseSrc="$HOME/xlvini"
+fi
+
+# Define default directories
+defBaseDir="${baseSrc}/asset"
+defOtherDirs=("${baseSrc}/res" "${baseSrc}/res/doc/" "${baseSrc}/res/dox/" "${baseSrc}/res/scripts")
+baseDir=""
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+usage() {
+cat <<- EOF
+    'cat $0'
+
+    Usage: $(basename $0) [options]
+
+    Options:
+    -s, string         search string
+    -q, quiet         wont print a word on your tidy terminal !!
+    -p, preview       opens a preview sidebar as move through files
+    -c, copy          copy file contents to clipboard
+    -o, open          open file after selection
+    -b, basedir DIR   define base directory to search files
+    -h, help          display this help message
+EOF
+}
+
+#- fn to handle file operations
+opr() {
+    local file="$(realpath "$1")"
+    local basefile=$(basename "$file")
+    local type="${2:-${basefile##*.}}"
+    
+    if [ "${catSig:-0}" -eq 1 ];then
+        cat "$file"
+        
+    elif [[ -e $file ]]; then
+        
+        if [[ -z $type || "$type" == "$basefile" ]];then
+            local mime=$(file --brief --mime-type --dereference "$file")
+            local category="${mime%%/*}"
+            local type="${mime##*/}"
+        fi
+
+        smsg "$(msg ${type:---}) $(inf "| $file\n")"
+            
+            case "$type" in
+                md)
+                    $parse "$file"
+                ;;
+                bash|sh|zsh|ksh|dash|x-shellscript|\
+                c|cpp|h|hpp|cs|java|go|rs|swift|ts|\
+                js|json|yaml|yml|toml|ini|xml|html|\
+                css|scss|py|lua|rb|php|pl|sql|\
+                x-shellscript)
+                    if [[ "$parser" == "glow" ]];then
+                        {
+                            echo "\`\`\`$type"
+                            cat "$file"
+                            # echo "\`\`\`"
+                        } | $parse
+                    else
+                        $parse "$file"
+                    fi
+                ;;
+                jpg | jpeg | png)
+                    if command -v imgcat &> /dev/null; then
+                        imgcat "$file"
+                    else
+                        :
+                        wrn "'imgcat' not found."
+                    fi
+                ;;
+                pdf)
+                    # inf "This is a PDF file. Performing PDF-specific actions..."
+                    # Add your PDF handling actions here
+                ;;
+                *)
+                    
+                    cat "$file"
+                ;;
+            esac
+        else
+            swrn "File not found '$(inf "$file")'";
+        fi
+    }
+    
+    #- parse args
+    while [[ ${#:-0} -gt 0 ]]; do
+        case $1 in
+            -|cat)
+                catSig=1;
+            shift ;;
+            -c|copy)
+                copySig=1
+            shift ;;
+            -d|d|dir)
+                baseDir="$2"
+            shift 2 ;;
+            -o|o|open)
+                openSig=1
+            shift ;;
+            -p|p|preview)
+                gistSig=1;
+                # fzf_param+="--preview 'bash -c \"opr {}\"' "
+            shift ;;
+            pg|pager)
+                xglow_param+="--pager "
+                pagerSig=1;
+            shift ;;
+            -q|q|quiet)
+                quietSig=1;
+            shift ;;
+            -s|s|string)
+                string="$2";
+            shift 2 ;;
+            --|view)
+                showSig=1
+            shift ;;
+            *\*)
+                searchString="${1%%\*}"
+                showSig=1
+            shift ;;
+            -h|help)
+                usage
+            exit 0 ;;
+            *)
+                searchString="$1"
+            shift ;;
+        esac
+    done
+    
+    
+    #- MAIN->
+    if command -v glow &> /dev/null; then
+        parser="glow"
+        parse="glow -w 0"
+    elif command -v xglow &> /dev/null; then
+        parser="glow"
+        parse="xglow -w 0"
+    else
+        parse="cat"
+    fi
+
+    # Chang dir so that the fil path given by find doesnt include parent path
+    cd "${baseDir:-$defBaseDir}" || err "Failed to access basedir '${baseDir:-$defBaseDir}'"
+    
+    #- export fn's for fzf preview
+    export -f inf msg smsg wrn alrt out opr;
+    export parse parser scriptName
+
+    #- file selection with fzf
+    file="$(find . "${defOtherDirs[@]}" -type f 2>/dev/null | (
+        if (( ${gistSig:-0} )) ;then
+            fzf --ansi --query="${searchString}" --preview 'bash -c "opr {}"' $fzf_param
+            elif (( ${showSig:-0} )) ;then
+            fzf --ansi --filter="${searchString}" | head -n1
+        else
+            fzf --ansi --query="${searchString}" $fzf_param
+        fi
+))" && \
+if [[ -n $file ]]; then
+    #- Perform the action based on the openSig flag
+    [ ${quietSig:-0} -ne 1 ] && opr "$file"
+    [ ${openSig:-0} -eq 1 ] && ( xdg-open "$file" || wrn "Failed to open '$file'" )
+    [ ${copySig:-0} -eq 1 ] && which xclip >/dev/null && \
+    (xclip -selection clipboard < "$file" && smsg "Copied contents to clipboard $(inf "'$file'")" || \
+    swrn "Failed to copy contents of $file") &
+else
+    inf "No file selected.."
+fi

@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+wrn() { out "\e[0;35m--" "$@"; }
+alert() { out "\e[0;33m--" "${@} !!"; return 1; }
+palert() { out "\e[0;33m" "${@} !!"; }
+err() { out "\e[0;31m\n--" "${@} !!"; exit 2; }
+
+#!/bin/bash
+
+driveLabel=${1:-"--"}
+driveUuid=${2:-"--"}
+
+if [[ -z $driveLabel && -z $driveUuid ]]; then
+	inf "Need either label/uuid arg.."
+	exit 1
+fi
+
+driveExistId=0
+
+outDriveName(){
+	(( $driveExistId == 1 )) && dLabel=${dLabel:-"$driveLabel"}
+	(( $driveExistId == 2 )) && dUuid=${dUuid:-"$driveUuid"}
+	(( $driveExistId == 3 )) && dLabel=${dLabel:-"$driveLabel"}; dUuid=${dUuid:-"$driveUuid"} 
+	echo ""
+	echo -e $(pinf "DriveLabel:")"$driveLabel"$(pinf ":")"$dLabel";
+	echo -e $(pinf "DriveUUID:")"$driveUuid"$(pinf ":")"$dUuid";
+	pinf "\nFDid:$driveExistId"
+}
+
+getDriveLabel(){
+	#local driveUuid=$1
+	echo -e $(blkid -s LABEL -o value /dev/disk/by-uuid/"$driveUuid")
+}
+
+getDriveUuid(){
+	#local driveLabel=$1
+	blkid -s LABEL -o value /dev/disk/by-uuid/"$driveLabel"
+}
+
+if [[ -n $driveUuid && "$driveUuid" =~ (-|--) ]]; then
+	
+	# search match for UUID
+	if [[ -e /dev/disk/by-uuid/$driveUuid ]]; then
+		driveExistId=2	# -UUID found
+		
+		# -If UUID match detected then chech if label matches aswell
+		if [[ -n "$driveLabel" && ! "$driveLabel" =~ (-|--) ]] && $(getDriveLabel "$driveUuid" | grep -wq "$driveLabel"; ); then
+			driveExistId=3	# -UUID & label matched
+			inf "Perfect, Drive UUID & Label match detected.."
+			outDriveName
+			#return 0
+		else 
+			if [[ -n $driveLabel && "$driveLabel" =~ (-|--) ]]; then
+				dLabel="$(getDriveLabel)"
+				inf "Unique, Drive UUID match detected.."
+				outDriveName
+				#return 0;
+			else
+				dLabel=$(getDriveLabel "$driveUuid";)
+				echo -e "$(inf "Unique, Drive UUID match detected with") $(palert "\"unmatched LABEL"\")"
+				outDriveName
+				#return 1;
+			fi
+		fi;
+	else # -If UUID unmatched then check if Label matches
+		if [[ -n $driveLabel && ! "$driveLabel" =~ (-|--) ]] && $(lsblk -o LABEL | grep -wq "$driveLabel"); then
+			driveExistId=1 	# Label matched
+			dUuid=$(blkid -o value -s UUID -t LABEL="$driveLabel")
+			echo -e "$(inf "Drive Label match detected with") $(palert "\"unmatched UUID"\")"
+			outDriveName
+			#return 2;
+		else
+			alert "Neither Drive UUID nor Label match was detected [$driveLabel: $driveUuid]"
+			#return 3;
+		fi;
+	fi;
+else 
+	#check if only label matches and return actual UUID
+	if [[ -n $driveLabel && ! "$driveLabel" =~ (-|--) ]] && $(lsblk -o NAME,LABEL | grep -wq "$driveLabel"); then
+		driveExistId=1 	#label matched
+		dUuid=$(blkid -o value -s UUID -t LABEL="$driveLabel")
+		inf "Drive Label match detected.."
+		outDriveName
+		#return 2;
+	else
+		alert "Drive Label match wasnt detected [$driveLabel]"	
+		#return 4;
+	fi;
+fi;	

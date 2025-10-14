@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+
+
+#- key id and name 
+read -p 'key-id: ' key_id
+#key_id=A2F683C52980AECF
+
+#- exit if errors found
+if [[ -z "$key_id"  ]];then
+	echo -e "\e[0;2m!! key-id param empty\e[0m"
+	exit
+fi
+if [[ "$key_id" =~ [^a-zA-Z0-9] ]];then
+	echo -e "\e[0;2m!! key-id contains invalid characters\n$key_id\e[0m"
+	exit
+fi
+
+
+#- assign name for key
+read -p 'key-name: ' key_name
+key_name="${key_name}.gpg"
+
+
+#- DEFAULTS
+key_server=keyserver.ubuntu.com
+path=/etc/apt/trusted.gpg.d/$key_name
+
+echo -e "\e[0;2m--retrieving key: $key_id-$key_name\e[0m"
+echo -e "\e[0;2m--server: $key_server"
+echo -e "\e[0;2m--adding key to '$path'"
+sudo apt-key adv --keyserver $key_server --recv-keys $key_id | gpg --dearmor | sudo tee $path
+
+
+#- ---fixing trusted gpg err---
+echo -e "\e[0;2m \nnow..\n#-fixing trusted gpg err-- \e[0m"
+echo -e "\e[0;2m--exporting key to 'tmp'\e[0m"
+apt-key export $key_id  | sudo gpg --dearmour -o /tmp/$key_name 
+
+#- exit if errors found
+if [ $? -ne 0 ];then
+	echo -e "\e[0;2mcould not proces 'trusted gpg fix'\nerr..\n$?\e[0m"
+	exit
+else
+	echo -e "\e[0;2m--deleting existing key\e[0m"
+	apt-key del $key_id 
+	echo -e "\e[0;2m--cloning key to -$path\e[0m"
+	mv -f /tmp/$key_name /etc/apt/trusted.gpg.d/$key_name
+fi
+
+#--DONE--
+echo -e "done.."
+

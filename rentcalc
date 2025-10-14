@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+calc() {
+    echo "scale=4; $*" | bc -l
+}
+
+rentCalc(){
+    rent=$1
+    chrg=$(calc "$rent * 2.68 / 100")
+    intr=$(calc "$rent * 4.53 / 100")
+    gst=$(calc "$rent * 0.81 / 100")
+    total=$(calc "$rent + $chrg + $intr + $gst")
+    printf "Chrg= %.2f\nIntr= %.2f\nGst= %.2f\nTotal= %.2f\n" "$chrg" "$intr" "$gst" "$total"
+}
+
+rentCalc ${@}

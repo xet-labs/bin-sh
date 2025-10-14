@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+mystInst() {
+	#- --initial-ups & configs--
+	msg "installing mysterium-node.."
+	inf "initial-configs.."
+	#- Initial updates
+	apt install -y apt-transport-https ca-certificates curl software-properties-common 
+	#DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+
+	#- firewall rules
+	inf "configuring firewall rules"
+	sysctl -w net.ipv4.ip_forward=1
+	iptables -P FORWARD ACCEPT
+	inf "enable persistent packet forwarding.."
+	inf "uncomment \"net.ipv4.ip_forward=1\"";
+	( open /etc/sysctl.conf ) || x-terminal-emulator -e bash -c "nano /etc/sysctl.conf; exec $SHELL";
+
+	#- myst key
+	inf "importing & installing myst key.."
+	sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys ECCB6A56B22C536D | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/mysterium-node.gpg
+	#sudo add-apt-repository ppa:mysteriumnetwork/node; sudo apt-get update; sudo apt install myst -y
+	#- -- OR --
+	sudo -E bash -c "$(curl -s https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh)" 
+
+	#- stopping myst service
+	inf "stopping mysterium-node.service"
+	sudo systemctl stop mysterium-node.service
+
+	msg "fixing trusted gpg err.."
+	key_id=ECCB6A56B22C536D
+	key_name='myst.gpg'
+	sudo apt-key export $key_id  | sudo gpg --dearmour -o /tmp/$key_name  
+	# '--deleting existing key'
+	sudo apt-key del $key_id 
+	inf "cloning key to -/etc/apt/trusted.gpg.d/$key_name"
+	sudo mv /tmp/$key_name /etc/apt/trusted.gpg.d/ 
+
+	#- restarting myst service
+	sudo systemctl restart mysterium-node.service
+	#sudo systemctl status mysterium-node.service
+	inf "done.."
+}
+
+mystRm() {
+	conf="/var/lib/mysterium-node /etc/mysterium-node"
+	msg "purging myst & its configs.. "
+	systemctl stop mysterium-node &&\
+	apt --purge remove -y myst
+	apt autoremove --purge
+	inf "purging myst configs"
+	inf "config: $conf"
+	rm -vrf $conf
+}
+
+mystClone() {
+	#!/bin/bash
+	msg "cloning myst creds.."
+	mystSrc=${1:-"./mysterium"}
+
+	if [[ "$(basename $mystSrc)" != ".mysterium" ]]; then 
+		if [[ -d $mystSrc/.mysterium ]];then
+			inf "Relocating mystcred src.."
+			mystSrc="$mystSrc/.mysterium"
+		else
+			err "no \".mysterium\" src detected"; 
+		fi;
+	fi;
+
+	# defaults
+	owner=mysterium-node
+	mystDirs=(
+		/var/lib/mysterium-node
+		/root
+	)
+	mystConfs=(
+		/etc/mysterium-node/config-mainnet.toml
+		/var/lib/mysterium-node/config-mainnet.toml
+		/root/config-mainnet.toml
+	)
+
+	#inf "source: $mystSrc"
+	echo "source: $mystSrc"
+	# stopping myst
+	inf "stopping myst.."
+	sudo systemctl stop mysterium-node.service
+
+	inf "configuring files.."
+	for mystDir in ${mystDirs[@]}; do
+		# local var dir
+		rm -rf ${mystDir}/keystore ${mystDir}/.mysterium/keystore
+		cp -ar ${mystSrc}/. ${mystDir}/ 
+		cp -ar ${mystSrc} ${mystDir}/
+		# /root dir
+		rm -rf ${mystRDir}/.mysterium/keystore
+		cp -ar ${mystSrc} ${mystRDir}
+	done
+
+	inf "configuring configs.."
+	for mystConf in "${mystConfs[@]}" ; do
+		# config
+		if [[ ! -f ${mystConf}.bkp ]];then
+			cp $mystConf ${mystConf}.bkp
+		fi;
+		echo -e "$mystConf"
+		sed -i 's/^active-services.*/active-services = "scraping,dvpn,wireguard,data_transfer"/' $mystConf
+		sed -i 's/UI_THEME_KEY.*/UI_THEME_KEY = "dark"/' $mystConf
+		#toml set --toml-path="$mystConf" "active-services" "scraping,dvpn,wireguard,data_transfer"                                         
+		#toml set --toml-path="$mystConf" "node-ui.UI_THEME_KEY" "dark"
+	done;
+
+	inf "configuring owner: $owner"
+	for mystDir in ${mystDirs[@]}; do
+		chown -Rc $owner:$owner $mystDir
+	done
+
+
+	# restarting myst
+    if [[ "$(systemctl is-enabled mysterium-node.service)" == "enabled" ]]; then
+    	inf "restarting myst.."
+        systemctl restart mysterium-node.service
+    else
+    	inf "myst wasnt enabled, so not restarting"
+    fi
+	inf "done.."
+}
+
+while getopts "c:ir" opt; do
+	case $opt in 
+		i) mystInst;
+			;;
+		r) mystRm;
+			;;
+		c) src=$OPTARG
+			mystClone $src
+			;;
+	esac;
+done;

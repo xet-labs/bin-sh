@@ -1,0 +1,328 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+err() { out "\e[0;31m!!" "$@"; exit 1;}
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+PKG_CATEGORY=(
+	pkg_user
+	pkg_firmware
+	pkg_user_gui
+	pkg_recovery
+	pkg_sys
+	pkg_build
+	pkg_dev
+	pkg_devs
+	pkg_util
+	pkg_utils
+	pkg_tool
+	pkg_tools
+	pkg_srv
+	pkg_dep
+)
+
+pkg_user=(
+	jq
+	borgbackup
+	glow
+	rclone
+	xdotool
+)
+
+pkg_firmware=(
+	dbus-x11
+	mesa-utils
+	firmware-linux
+	firmware-realtek
+	realtek-rtl88xxau-dkms
+)
+
+pkg_user_gui=(
+	gnome-shell-extension-prefs gnome-shell-extensions
+	vlc
+	gparted
+	baobab
+	pavucontrol
+	remmina
+	#timeshift	bleachbit
+)
+
+pkg_build=(
+	bc
+	flex
+	bison
+	dwarves
+ 	xz-utils
+	build-essential
+	zlib1g
+	zlib1g-dev
+	lib32z1   
+	ncurses-dev
+	libncurses-dev
+	libssl-dev 
+	libelf-dev
+
+	gcc-aarch64-linux-gnu
+	gcc-arm-linux-gnueabi
+)
+pkg_devops=(
+	ansible
+	
+	jenkins # circle ci
+
+	terraform
+
+	prometheus
+	grafana
+
+	vault
+)
+pkg_sys=(
+	lvm2
+	zram-tools
+	memtest86+
+)
+pkg_dev=(
+	rsync
+	git
+	fzf
+	adb
+	android-sdk-platform-tools
+	tmux
+	
+	cmatrix
+	figlet
+)
+pkg_devs=(
+	minicom
+	scrcpy
+
+	qemu-user-static
+	binfmt-support
+
+	pip
+
+	cockpit
+	qemu-kvm libvirt-daemon-system libvirt-clients virt-manager
+	#- CPU architecture emulators, For bridged networking
+	#qemu-system bridge-utils
+)
+pkg_util=(
+	curl
+	iw
+	iproute2
+	openssh-server sshfs
+	iptables-persistent
+	x11-utils
+
+	nfs-kernel-server
+	nfs-common
+	samba
+
+	#net-tools 	#- depreciated as iproute2 appreciated!!
+)
+pkg_utils=(
+	ipcalc
+	usbip
+	dnsmasq hostapd wpasupplicant
+)
+pkg_recovery=(
+	testdisk
+)
+pkg_tool=(
+	nmap
+	hping3
+	iperf3
+	macchanger
+)
+pkg_tools=(
+	isc-dhcp-server 	#dhcpd|dhcp
+	net-tools #route
+	hostapd
+	lighttpd
+	php-cgi 
+
+	cowpatty
+	mdk3
+	mdk4
+	dsniff
+
+	#tshark
+	
+	wordlists
+	
+	#archivemount libfuse-dev 
+	
+	#tor proxychains
+)
+pkg_dep=(
+
+)
+
+pkg_extra=(
+	virtualbox
+	kicad
+)
+
+pkg_srv=(
+	nginx openssl keepalived
+	
+	mariadb-server mariadb-client	
+	
+	php php-fpm php-mysql php-cgi
+
+	avahi-daemon avahi-utils
+)
+
+pkg_srv_bundle=(
+	# -required modules
+	nginx php php-cgi php-fpm php-mysql libapache2-mod-php mariadb-server mariadb-client mariadb-server ghostscript 
+
+	# -php-modules
+	php-common php-curl php-gd php-mbstring php-ctype php-dom php-fileinfo php-json php-simplexml php-pdo-mysql php-posix php-xml php-xmlreader php-xmlwriter php-zip
+
+	# -server-perfomance
+	php-apcu php-memcached php-redis
+
+	# -recommended
+	php-bz2 php-intl php-exif php-gmp php-imagick
+
+	# -preview gen
+	imagemagick ffmpeg
+
+	# -required for spec app
+	php-ldap php-smbclient php-ftp php-imap php-bcmath
+
+	#not found
+	# php-filter php-hash php-libxml php-openssl php-session php-zlib
+)
+
+
+
+pkgInstAllSig=0
+pkgNo=()
+yesSig=0
+extraModSig=0
+
+runSig(){
+  local fun_name="$1"
+  local fun_sigVar="${fun_name}Sig"
+  
+  if [[ "${!fun_sigVar}" == 1 || "${!fun_sigVar,,}" == 1 ]]; then
+    # Execute the function
+    $fun_name
+  fi
+}
+
+PKG_list() {
+  num=1
+  for pkgCat in "${PKG_CATEGORY[@]}"; do
+    printf "\e[0;2m$num. $pkgCat: \e[0m"
+    pkgArrayName="${pkgCat}[@]"
+    for pkg in "${!pkgArrayName}"; do
+      printf "$pkg "
+    done
+    printf "\n"
+    num=$((num + 1))
+  done
+}
+
+
+PKG_setup(){
+	if [[ $pkgInstAllSig == 1 ]]; then
+		pkgRoot=()
+		num=1
+		inf "Preparing full install pkg list.."
+		for pkgCat in "${PKG_CATEGORY[@]}"; do
+		    printf "\e[0;2m$num. $pkgCat: \e[0m"
+			pkgArrayName="${pkgCat}[@]"
+			for pkg in "${!pkgArrayName}"; do
+				pkgRoot+=("$pkg")
+				#pkgRoot=($pkg "${pkgRoot[@]}")
+				printf "$pkg "
+			done
+			printf "\n"
+			num=$((num + 1))
+		done		
+	elif [[ -n $pkgNo ]]; then
+		pkgRoot=()
+		num=1
+		inf "Preparing full install pkg list.."
+
+		# Convert $pkgNo into an array for easy comparison
+		IFS=',' read -ra pkgNoArray <<< "$pkgNo"
+
+		for pkgCat in "${PKG_CATEGORY[@]}"; do
+		    # Check if $num is in $pkgNoArray
+		    if [[ " ${pkgNoArray[@]} " =~ " $num " ]]; then
+		        printf "\e[0;2m$pkgCat: \e[0m"
+		        pkgArrayName="${pkgCat}[@]"
+		        for pkg in "${!pkgArrayName}"; do
+		            pkgRoot+=("$pkg")
+		            printf "$pkg "
+		        done
+		        printf "\n"
+		    fi
+		    num=$((num + 1))
+		done
+	else
+		err "No package category defined!!\nSpecify using -p <category no>"
+		return
+	fi
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		-y|--yes) # Proceed without confirmation
+			yesSig=1
+			shift
+			;;
+		-l) # List available package categories
+			PKG_list
+			exit
+			;;
+		-a) # Install packages from all available categories
+			pkgInstAllSig=1
+			shift 
+			;;
+		-p) # Define category numbers to install packages from
+			pkgNo=$2
+			shift 2
+			;;
+		--extra) # Install extra package modules
+			extraModSig=1
+			shift 
+			;;
+		*) # Invalid option
+			err "Invalid option: $1"
+			exit 1
+			;;
+	esac
+done
+PKG_setup
+
+
+# Initialize repository updates
+#apt update
+msg "Installing defined packages"
+printf "\e[0;2mPackages: \e[0m"
+echo -e ${pkgRoot[@]}
+printf "\n"
+# Confirm before proceeding
+if [[ $yesSig != 1 ]]; then
+	read -p "Press Enter to continue..."
+fi
+apt install -y "${pkgRoot[@]}"
+
+# Package scripts
+if [[ $extraModSig == 1 ]]; then 
+	inf "Installing extra package modules.."
+	# Add your package installation functions here if needed
+fi

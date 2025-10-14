@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "$scriptPath")"
+scriptName="${0##*/}"
+
+source "${scriptDir}/libxlvini"
+
+# env
+TARGET="${1}"
+shift
+arg="${@}"
+
+# defaults
+ARCH=$(uname -m)
+BINARY="${TARGET}"
+
+# Check if the package binary exists (as architecture-based package names)
+isBin() {
+    local _bin=$1
+    if command -v "$_bin" &>/dev/null; then
+        BINARY="$(command -v "$_bin")"
+        return 0
+    elif [[ -x "${scriptDir}/$_bin" ]]; then
+        BINARY="${scriptDir}/$_bin"
+        return 0
+    elif [[ -x "./$_bin" ]]; then
+        BINARY="./$_bin"
+        return 0
+    else
+        return 1
+    fi
+}
+
+anyArch() {
+    local arch
+    for arch in "$@"; do
+        if isBin "x${TARGET}-${arch}"; then
+            echo "x${TARGET}-${arch}"
+            return 0
+        fi
+    done
+    return 1  # none found
+}
+
+
+if ! command -v "$BINARY" &> /dev/null; then
+    #- assign binary based on arch if none found in PATH
+    case "$ARCH" in
+        armv6l|armv7l)
+            BINARY="$(anyArch armv7l)" ;;
+        armhf)
+            BINARY="$(anyArch arm)" ;;
+        aarch64|arm64)
+            BINARY="$(anyArch aarch64 arm)" ;;
+        x86)
+            BINARY="$(anyArch x86 aarch64 arm)" ;;
+        x86_64|amd64)
+            BINARY="$(anyArch x86_64 x64 x86 aarch64 arm)" ;;
+        *)
+            BINARY="x${TARGET}-armv7l" ;;
+    esac
+
+fi
+
+if ! isBin "$BINARY"; then
+    swrn "'$BINARY' not found or not executable!!"
+    exit 1
+fi
+
+# Execute the binary with any passed arguments
+exec "${BINARY}" "${@}"

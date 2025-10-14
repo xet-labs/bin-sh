@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+# Clone the repository
+if [ -z "$1" ]; then
+    echo "Usage: $0 <repository-url>"
+    exit 1
+fi
+
+
+repo=$1
+git clone $repo
+
+# Navigate into the repository directory
+parentDirName=$(basename "$repo")
+parentDirName=${parentDirName%.git}
+
+cd ${parentDirName} && mkdir branch && cd branch
+
+parentDir=$PWD
+
+# Fetch all branches
+git fetch --all
+
+# Get a list of all remote branches
+branches=$(git branch -r | grep -v '\->')
+
+# Loop through each branch and check it out locally
+for branch in $branches; do
+    # Get the branch name by stripping the remote name (origin/)
+    branch_name=${branch#origin/}
+
+    # Check out the branch locally
+    echo -e "Branch name: "$branch_name "\nBranch: "$branch
+    git clone "$repo" && mv "$parentDirName" "$branch_name" && cd $branch_name && git checkout $branch_name
+    cd $parentDir
+done

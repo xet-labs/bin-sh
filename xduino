@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+if command -v "arduino-cli" &> /dev/null; then
+	arduino-cli ${@}
+else
+	arduino-cli-amd ${@}
+fi

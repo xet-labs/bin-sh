@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+centosXmrig(){
+	if [[ $advSig == 1 ]]; then
+		echo "Building Adv centos xmrig-binary.."
+		sudo yum install -y epel-release
+		sudo yum install -y git make cmake3 gcc gcc-c++ libstdc++-static automake libtool autoconf
+		git clone https://github.com/xmrig/xmrig.git
+		mkdir xmrig/build
+		cd xmrig/scripts && ./build_deps.sh && cd ../build
+		cmake3 .. -DXMRIG_DEPS=scripts/deps
+		make -j$(nproc)
+	else
+		echo "Building Basic centos xmrig-binary.."
+		sudo yum install -y epel-release
+		sudo yum install -y git make cmake gcc gcc-c++ libstdc++-static libuv-static hwloc-devel openssl-devel
+		git clone https://github.com/xmrig/xmrig.git
+		mkdir xmrig/build && cd xmrig/build
+		cmake ..
+		make -j$(nproc)
+	fi;
+}
+
+
+startXmrig(){
+	./xmrig -a rx -o stratum+ssl://rx.unmineable.com:443 -u XMR:462hPRMwcPR2HbzkCHvFDY7EdSskMqMJ3fd8ukr9kdXvPsuPTCcrkHf9fXGBAQPozQDdf2uvdLsCPdxu9NsDQedc2265Vob.unmineable_worker_vkaoymmn -p x --cpu-affinity$(($(nproc) * 3/4))
+}
+
+while getopts ab1b2b3b4b5s $opt; do
+	case $opt in
+		a ) # set advanced biuild signal
+			advSig=1
+			;;
+		b1 )centosXmrig
+			;;
+		b2 )
+			;;
+		b3 )
+			;;
+		s ) #start xmrig
+			;;
+	esac
+	#statements
+done
+
+
+

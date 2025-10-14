@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+
+# ======= CONFIGURATION =======
+PREFERRED_WIFI=("tenet_5G" "tenet" "Highspeed")
+DEFAULT_NETWORK="FallbackNetwork"
+
+RETRY_INTERVAL=2
+
+LOG_FILE="/var/log/${0##*/}.log"
+SERVICE_FILE="/etc/systemd/system/${0##*/}.service"
+SERVICE_NAME="$(basename "$SERVICE_FILE")"
+DISPATCHER_FILE="/etc/NetworkManager/dispatcher.d/99-${0##*/}"
+
+# ======= FUNCTIONS =======
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m-- " "$@"; }
+pmsg() { out "\e[1;34m" "$@"; }
+inf() { out "\e[0;2m-- " "$@"; }
+alert() { out "\e[0;35m" "$@"; }
+wrn() { out "\e[0;33m-- " "$@"; return 1; }
+err() { out "\e[0;31m\n-- " "$@ !!"; exit 1; }
+
+# Log messages to file or stdout
+log() {
+    if [[ ! -e $LOG_FILE ]]; then
+        touch "$LOG_FILE"
+    fi
+    # echo -e "$(date '+%Y-%m-%d %H:%M:%S') - $@" | tee -a "$LOG_FILE"
+    echo -e "$@" | tee -a "$LOG_FILE"
+}
+
+# Get the current Wi-Fi connection SSID
+current_wifi() {
+    nmcli -t -f active,ssid dev wifi | grep "^yes:" | cut -d: -f2
+}
+
+# Connect to a specified Wi-Fi network
+connWifi() {
+    local network="$1"
+    log "Attempting to connect to network: $network"
+    if nmcli dev wifi connect "$network" >/dev/null 2>&1; then
+        log "Successfully connected to: $network"
+        return 0
+    else
+        log "Failed to connect to: $network"
+        return 1
+    fi
+}
+
+# Main function to manage Wi-Fi connection
+manage_wifi() {
+    if [[ ${#PREFERRED_WIFI[@]} -eq 0 ]]; then
+        log "No preferred networks specified in the configuration. Exiting."
+        exit 1
+    fi
+
+    while :; do
+        # Check current connection
+        current_ssid=$(current_wifi)
+        if [[ -n $current_ssid ]]; then
+            log "Currently connected to: $current_ssid"
+            for preferred in "${PREFERRED_WIFI[@]}"; do
+                if [[ $current_ssid == "$preferred" ]]; then
+                    log "Already connected to a preferred network: $current_ssid. No action needed."
+                    return 0
+                fi
+            done
+        else
+            log "Not connected to any Wi-Fi network."
+        fi
+
+        # Scan for available networks
+        log "Scanning for available Wi-Fi networks..."
+        available_wifi=$(nmcli -t -f SSID dev wifi | sort -u | tr '\n' ', ')
+        log "Available Wi-Fi networks: $available_wifi"
+
+        # Try connecting to preferred networks in order
+        for preferred in "${PREFERRED_WIFI[@]}"; do
+            if echo "$available_wifi" | grep -qw "$preferred"; then
+                log "Preferred network found: $preferred"
+                if connWifi "$preferred"; then
+                    return 0
+                fi
+            fi
+        done
+
+        # Try connecting to the default network if defined
+        if [[ -n $DEFAULT_NETWORK ]]; then
+            log "Attempting to connect to default network: $DEFAULT_NETWORK"
+            if echo "$available_wifi" | grep -qw "$DEFAULT_NETWORK"; then
+                if connWifi "$DEFAULT_NETWORK"; then
+                    return 0
+                fi
+            fi
+        fi
+
+        log "No preferred or default networks connected. Retrying in $RETRY_INTERVAL seconds..."
+        sleep "$RETRY_INTERVAL"
+    done
+}
+
+# Set up the Wi-Fi Manager service and dispatcher
+setup_service() {
+    log "Setting up the Wi-Fi Manager service..."
+
+    # Ensure the script is in a directory that is executable
+    sudo cp "$0" /usr/local/bin/wifi_manager
+    sudo chmod +x /usr/local/bin/wifi_manager
+
+    # Create systemd service
+    sudo bash -c 'cat <<EOF > '"$SERVICE_FILE"'
+[Unit]
+Description=Wi-Fi Manager
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/wifi_manager --run
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF'
+
+    # Enable and start the service
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SERVICE_NAME"
+    sudo systemctl start "$SERVICE_NAME"
+
+    # Create dispatcher script
+    sudo bash -c 'cat <<EOF > '"$DISPATCHER_FILE"'
+#!/bin/bash
+if [[ "$2" == "down" || "$2" == "up" ]]; then
+    /usr/local/bin/wifi_manager --run &
+fi
+EOF'
+    sudo chmod +x "$DISPATCHER_FILE"
+
+    log "Wi-Fi Manager service and dispatcher are set up."
+}
+
+# Remove the Wi-Fi Manager service and dispatcher
+remove_service() {
+    log "Removing the Wi-Fi Manager service..."
+
+    # Stop the service and disable it
+    sudo systemctl stop "$SERVICE_NAME"
+    sudo systemctl disable "$SERVICE_NAME"
+
+    # Remove the service file
+    sudo rm -f "$SERVICE_NAME"
+
+    # Remove the dispatcher file
+    sudo rm -f "$DISPATCHER_FILE"
+
+    # Reload systemd manager
+    sudo systemctl daemon-reload
+
+    # Remove the script binary
+    sudo rm -f /usr/local/bin/wifi_manager
+
+    log "Wi-Fi Manager service and dispatcher have been removed."
+}
+
+# ======= SCRIPT ENTRY POINT =======
+
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root. Exiting."
+    exit 1
+fi
+
+case "$1" in
+    --setup|s)
+        setup_service
+        ;;
+    --remove|u)
+        remove_service
+        ;;
+    --run|r)
+        log "Wi-Fi Manager started."
+        manage_wifi
+        log "Wi-Fi Manager stopped."
+        ;;
+    *)
+        echo "Usage: $0 --setup|s to set up, --remove|u to remove, or --run|r to run the Wi-Fi Manager."
+        exit 1
+        ;;
+esac

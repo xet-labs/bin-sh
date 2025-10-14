@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# @inf: backup prog using borg
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+# -config-file
+CONFdir="/x/.cred/initbkp"
+BKPconf="${CONFdir}/bkpconf.json"
+#defconf="${CONFdir}/defaults.conf"
+
+# !!-MAINTENANCE-AREA
+BKPinitDebug=
+
+# -capture basic data
+userdir=$(pwd)
+
+
+# -skip the module/function if "Debug<fun_name>=0"
+debugCheck() { 
+    if [[ "${!1}" == 0 ]]; then 
+        alrt "Maintenance:${!1}" "0";
+        alrt "$(inf "${1/[dD]ebug/}" "2";)" "0";
+        alrt "$(inf "function skipped.." "2";)"; 
+        return 1; 
+    fi; 
+}
+
+
+valout() { if [[ -z ${!1} ]];then echo -e "-"; else echo -e "${!1}"; fi; }
+
+showval() {   
+    if [[ -z $2 ]];then
+        echo -en " -${1}: "; inf $(valout "$1" "\n");
+    elif [[ $2 == "0" ]];then
+        inf $(valout $1 "0");
+    else 
+        echo -en "${2}: "; inf $(valout "$1" "$3") ;
+    fi;
+}
+
+
+conditions() {
+    # -check if module is enabled
+    checkstatus() {
+        if [[ $status == 0 ]];then 
+            alrt "Bkp.disabled";
+            return 1
+        fi;
+    }
+
+    # -check if source is empty or not
+    checkSrc() {
+        if [[ $srcDir == "" ]]; then 
+            wrn "NULL.BkpSrc" "0";
+            wrn "$(inf "Id:$(valout "id" "0";)" "2";)" "0"; 
+            wrn "$(inf "Tag:$(valout "tag" "0";)" "2";)"
+
+            return 1
+        fi;
+    }
+    if checkstatus&&checkSrc; then
+        :
+    else 
+        return 1
+    fi
+}
+
+showvals() {
+    showval "id" " -Id";
+    showval "status"
+    showval "tag";
+    showval "srcDir";
+    #showval "srcDir";
+    showval "bkpRepoL";
+    showval "bkpRepoR";
+    showval "bkpArcName";
+    #showval "keysrc";
+    #showval "locksrc";
+    showval "encryption";
+    showval "compression";
+}
+
+vals-unset() {
+    inf2 "Nulifying.vars"
+    var="id srcDir  bkpRepoL bkpArcName bkpRepoR keysrc locksrc passphrase encryption compression "
+    var_sort=$(sort <<< $var | tr '\n' ' ')
+    #showval "var"
+    unset $var || wrn "couldnt nullify \n$vars"
+}
+
+uinput() {
+    local prompt_var="$1"
+    local input_var="${2:-$1}"
+    read -rp "[input] $prompt_var: " user_input
+    cleaned_input="${user_input#[\'\"]}"
+    cleaned_input="${cleaned_input%[\'\"]}"
+    echo "$cleaned_input"
+    eval "$input_var=\$cleaned_input"
+}
+
+BKPvals() {
+    # ----DEFAULTS----
+    def_encryption="repokey"
+    def_compression="zstd,19"
+
+    # -prune
+    def_pruneDaily=1
+    def_pruneWeekly=2
+    def_pruneMonthly=2
+    def_pruneYearly=2
+    
+    # -bkp.id
+    id1="$id"
+    id=$(printf "%#03d" "$id")
+    
+    # -bkp.src 
+    srcDir="$srcDir"
+
+    # -bkp.dest|repo val
+    passphrase="${pass:-$phrase}"
+    bkpRepoL="${bkpRepoL:-"${root_bkpRepoL}$srcDir"}"
+
+    # -optional val
+    encryption="${encryption:-$def_encryption}"
+    compression="${compression:-$def_compression}"
+
+    # -check if source exists else return
+    conditions || return $?;
+
+    # -borg.prune.val
+    pruneDaily=${pruneDaily:-$def_pruneDaily}
+    pruneWeekly=${pruneWeekly:-$def_pruneWeekly}
+    pruneMonthly=${pruneMonthly:-$def_pruneMonthly}
+    pruneYearly=${pruneYearly:-$def_pruneYearly}
+
+    # -bkp-archieve name
+    srcDir=$(basename $srcDir)
+    partArcName=$srcDir
+    if [[ $srcDir == "/" ]]; then partArcName="$(hostname):$(uname -r)";fi;
+    def_bkpArcName="${partArcName}-$(date +%Y-%m-%d-%H%M)"
+    bkpArcName="${bkpArcName:-$def_bkpArcName}"
+
+    # -exporting BORG.INTERNAL.val
+    # -Setting this, so that respected values does not need to be given in the commandline..
+    export BORG_REPO=$bkpRepoL
+    export BORG_PASSPHRASE=$passphrase
+    # -extra borg parameters
+    export BORG_RELOCATED_REPO_ACCESS_IS_OK=yes
+    export BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=no
+
+    # -show values
+    showvals    
+}
+
+BKPoneshot() {
+    inf "--oneshotbkp--"
+    uinput "srcDir"
+    uinput "bkpRepoL"
+    uinput "encryption" 
+#    inf "[input] srcDir:${read srcDir}
+}
+
+BKPinit() {
+    #!/bin/sh
+    msgc
+    msg2 "bkp.onsite" "0";
+    msg2 "$(inf "Id:$(if [[ -n $id ]];then printf "%03d" "$id"; else printf "-"; fi;)" "2";)" "0"; 
+    msg2 "$(inf "$(valout "srcDir" "0";)" "2";)" 
+
+    # -retrieve valuse from BKPvals
+    BKPvals || return $?; 
+    
+    # -debug.check
+    debugCheck "BKPinitDebug" || return;
+
+    # -reinitiate and check if local repo exists
+    borg init --encryption "$encryption" $bkpRepoL
+
+    # some helpers and error handling:
+    #inf() { printf "\n%s %s\n\n" "$( date )" "$*" >&2; }
+    trap 'vals-unset && wrn "Backup interrupted : $( date )" && return 2' INT TERM
+
+    # Backup the most important directories into an archive named after
+    # the machine this script is currently running on:
+    cd ${srcDir}/..
+    borg create                         \
+        -v --filter AME -p --stats --show-rc \
+        --compression $compression      \
+        --exclude-caches                \
+        --exclude={"*/home/*/.cache/*","*/*/.cache/*","*/dev/*","*/lost+found","*/media/*","*/mnt/*","*/proc/*","*/run/*","*/sys/*","*/tmp/*","*/var/tmp/*"} \
+        --exclude={"*/-tmp/*","*/*.tmp/*"} \
+                                        \
+        ::${bkpArcName}                 \
+        ${srcDir}
+
+    backup_exit=$?
+    cd $userdir
+    # if [[ $backup_exit == 0 ]];then
+    #     #rename after succesfull
+    #     inf "renaming borg ${bkpArcName} -> ${bkpArcName}-stable"
+    #     borg rename         \
+    #                         \
+    #     ::${bkpArcName} ${bkpArcName}-stable
+    # else
+    #     #rename after UNsuccesfull
+    #     wrn "renaming borg ${bkpArcName} -> ${bkpArcName}-UNSTABLE"
+    #     borg rename         \
+    #                         \
+    #     ::${bkpArcName} ${bkpArcName}-UNSTABLE
+    # fi;
+
+    msg "Pruning repository"
+
+    # Use the `prune` subcommand to maintain 7 daily, 4 weekly and 6 monthly
+    # archives of THIS machine. The '{hostname}-*' matching is very important to
+    # limit prune's operation to this machine's archives and not apply to
+    # other machines' archives also:
+
+    borg prune                          \
+        --list                          \
+        --glob-archives "${partArcName}*" \
+        --show-rc                       \
+        --keep-daily    ${pruneDaily}   \
+        --keep-weekly   ${pruneWeekly}  \
+        --keep-monthly  ${pruneMonthly} \
+        --keep-yearly   ${pruneYearly}
+
+    prune_exit=$?
+
+    # actually free repo disk space by compacting segments
+    msg "Compacting repository"
+    borg compact
+    compact_exit=$?
+ 
+
+    # use highest exit code as global exit code
+    global_exit=$(( backup_exit > prune_exit ? backup_exit : prune_exit ))
+    global_exit=$(( compact_exit > global_exit ? compact_exit : global_exit ))
+
+    if [ ${global_exit} -eq 0 ]; then
+        inf "Backup, Prune, and Compact finished successfully"
+        inf "renaming borg ${bkpArcName} -> ${bkpArcName}-stable"
+        borg rename         \
+                            \
+        ::${bkpArcName} ${bkpArcName}-stable
+    elif [ ${global_exit} -eq 1 ]; then
+        wrn "Backup, Prune, and/or Compact finished with warnings"
+    else
+        wrn "Backup, Prune, and/or Compact finished with errors"
+    fi
+
+    # -clear vars
+    vals-unset ;
+}
+
+extract() {
+    # extract values from [config].json
+    xtract() { eval "$1=\"$(jq -r ".directories[] | select(.id==\"$id\") | .$1" "$BKPconf" |sed 's/\bnull\b//g';)\""; }
+    for id in $(jq -r '.directories[].id' "${BKPconf}"); 
+    do
+        xtract "tag";
+        xtract "status";
+        xtract "srcDir";
+        xtract "bkpRepoL";
+        xtract "bkpRepoR";
+        xtract "phrase";
+        xtract "keysrc";
+        xtract "locksrc";
+        xtract "encryption";
+        xtract "compression";
+
+        # -initiate backup    
+        BKPinit;
+    done;
+}
+
+clear
+
+# retrieve args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        i ) # initiate repository
+            
+            ;;
+        b ) # start backup
+                
+            ;;
+    esac
+done
+
+extract
+
+echo ""
+inf2 "done..";

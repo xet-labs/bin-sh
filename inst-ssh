@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+
+#x-:dest:/usr/local/bin/
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+
+msg  "installing openssh..\e[0m"
+sudo apt install openssh-server -y
+sudo apt autoremove -y && sudo apt autoclean -y
+
+msg  "removing run levels for SSH.."
+sudo update-rc.d -f ssh remove
+
+msg  "loading SSH defaults to run level.."
+sudo update-rc.d -f ssh defaults
+
+#- backingup default ssh keys
+keysSrc=/etc/ssh/ssh_host_*
+keysBkp=/etc/ssh/old.default_kali_keys
+echo -e "\e[0;32m#- backedup default SSH-keys..\e[0;2m
+--Src: $keysSrc
+--Dest: $keysBkp
+\e[0m"
+sudo mkdir $keysBkp -p
+sudo mv $keysSrc $keysBkp
+
+#- regenerate ssh keys
+msg  "regenerating openssh-server keys.."
+sudo dpkg-reconfigure openssh-server
+
+#- md5sum of '/etc/ssh/ssh_host_*' must be different from '/etc/ssh/old.default_kali_keys/'
+echo -e "\e[0;2m#-- verifying new SSH key..\e[0m"
+newKeys=$(md5sum /etc/ssh/ssh_host_*)
+oldKeys=$(md5sum /etc/ssh/old.default_kali_keys/*)
+if [[ $newKeys != $oldKeys ]];then
+	echo -e "\e[0;32m--new ssh keys generated\e[0m"
+elif [[ $newKeys == $oldKeys ]];then
+	echo -e "\e[0;31m--\!\!warning new keys wern't generatede\e[0m"
+fi
+
+#- restarting to apply changes
+echo -e "\e[0;90m#- applying changes..\e[0m\n"
+sudo service ssh restart
+
+#- banner change instruction
+inf  "skipping default SSH banner change"
+echo "to Set MOTD (banner) edit the /etc/motd file.."
+echo "you can generate MODT ascii art from http://patorjk.com/software/taag/ and paste the art to /etc/motd file and restart the service to load banner change 'service ssh restart'.." 
+
+#- backingup default SSH config 
+configBkp=/etc/ssh/sshd_config_backup
+configSrc=/etc/ssh/sshd_config
+echo -e "\e[0;32m#- backedup default SSH configs..\e[0;2m
+--Src: $configSrc
+--Dest: $configBkp
+\e[0m"
+sudo cp $configSrc $configBkp 
+
+#- hint to change default ssh port
+echo -e "\e[0;2m#-- change SSH port from 22 (defaut) to port btwn \e[0;33m10000-64000
+\e[0;2m#-- look for \e[0;33m'#port 22' \e[0;2m& change it to 'port <integer>'\e[0m"
+nano /etc/ssh/sshd_config; &
+
+#- restarting to apply changes
+echo -e "\e[0;90m#- applying changes..\e[0m\n"
+sudo service ssh restart
+
+
+
+#--------------------------------------------------------------
+sshDefPort() {
+#- default ssh port id in /etc/ssh/sshd_config
+sshPortLocn=/etc/ssh/sshd_config
+sshPort=$(grep -iw "port"  $sshPortLocn | awk 'FNR==1 {print $2}')
+
+sshPortFreqa=$(grep -iw "port"  "$sshPortLocn"|wc -l)
+sshPorta=$(grep -iw "port"  "$sshPortLocn"|awk '{print $2}' )
+#echo "#! $sshPortFreqa"
+sshPortFrequ=$(grep -iw "^#port"  "$sshPortLocn"|wc -l)
+sshPortu=$(grep -iw "^#port"  "$sshPortLocn"|awk '{print $2}' )
+#echo "# $sshPortFrequ"
+sshPortFreqd=$(grep -iw "^port"  "$sshPortLocn"|wc -l)
+sshPortd=$(grep -iw "^port"  "$sshPortLocn"|awk '{print $2}' )
+#echo "! $sshPortFreqd"
+
+#- filtering multiple ports
+#- for "#" commented ports only
+if [[ $sshPortFreqd == 0 ]];then
+	if [[ $sshPortFrequ == 1 || $sshPortFrequ == 0 ]];then
+		echo -e "--no defined ports '$sshPortFrequ' in $sshPortLocn\n--ports: $(echo $sshPortu) "
+		sshPort=22
+		echo -e "--global default selected"
+	elif [[ $sshPortFrequ > 1 ]];then
+ 		echo -e "!!warning\n--found multiple '$sshPortFrequ' commented ports in $sshPortLocn\n--ports: $(echo $sshPortu) "
+		sshPort=22
+		echo -e "--global default selected"
+	fi
+fi
+#- for defined ports only	
+if [[ $sshPortFrequ == 0 ]]; then
+	if [[ $sshPortFreqd > 1 ]]; then
+		echo -e "!!warning\n--found multiple '$sshPortFreqd' defined ports in $sshPortLocn\n--ports: $(echo $sshPortd) "
+		sshPort=$(grep -iw "^port"  $sshPortLocn | awk 'FNR==1 {print $2}')
+	fi
+fi
+#- for both defined & undefined ports
+if [[ $sshPortFrequ -ge 1 ]];then
+	if [[ $sshPortFreqd -ge 1 ]];then
+		echo -e "!!warning\n--found multiple '$sshPortFreqa' ports in $sshPortLocn\n--ports: $(echo $sshPorta) "
+		sshPort=$(grep -iw "^port"  $sshPortLocn | awk 'FNR==1 {print $2}')
+	fi
+fi
+echo -e "--default-port: $sshPort"
+}
+
+
+sshParam(){
+sshDefPort
+#- generate SSH command to login to current environment
+echo 'try-->'
+#- defaults
+username=$(users|awk '{print $1}')
+user_ip=$(ip route get 1 | awk '{print $7}')
+
+echo -e "--default-port: $sshPort"
+echo "ssh $username@$user_ip -p $sshPort *"
+
+user_ip=$(ip route get 1 | awk '{print $3}')
+echo "ssh $username@$user_ip -p $sshPort"
+
+echo '--for wan'
+wanip=$(dig @resolver4.opendns.com myip.opendns.com +short)
+
+echo "ssh $username@$wanip -p $sshPort"
+}
+
+
+sshParam

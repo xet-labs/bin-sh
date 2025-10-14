@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# @inf: fix no dbus erro for nautilus
+
+#run without root
+systemctl --user restart gvfs-udisks2-volume-monitor 

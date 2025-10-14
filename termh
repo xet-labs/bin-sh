@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# @inf: open terminal with path currently opened in filemanager else scan clipboard for paths 
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+
+# --------DEFAULTS--------
+# default directory log file
+def_fdLog="~/.config/xet/termh/.fd.log"
+
+
+
+# !!--MAINTENANCE-AREA--
+termhSig=
+
+# log-file
+#exec > $HOME/-xlvini/.log/termh.log 2>&1
+
+# prerequsites
+if ! command -v xdotool &> /dev/null; then
+    x-terminal-emulator -e bash -c "echo \"xdotool is not installed, installing it now...\"; sudo apt install -y xdotool;"
+fi;
+
+# skip the module/function if "<fun_name>.sig=0"
+debugCheck() { if [[ "${!1}" == 0 ]]; then wrn "[ maintenance-code: ${!1} ] --${1/[sS]ig/}-- Function skipped.." ; return 1; fi; return 0; }
+
+
+# extract clipboard contents
+eclip() { xclip -o -sel clip | sed 's/^file:\/\///;s/%20/ /g'; }
+
+# add to clipboard
+aclip() { echo "$1" | xclip -sel clip; }
+
+restoreClip() { 
+    pmsg "Restoring-CLIP-Contents.."
+    echo "$1" | xclip -sel clip;
+}
+
+
+termh() {
+    
+    debugCheck "termhSig" || return;
+
+    inf "Opening Terminal.."
+    if [[ -z $1 ]];then alert "Looking for paths in clipboard.."; fi;
+    # assign the value of passed variable else scan clip..
+    dirPath="${1:-$(eclip)}"
+
+    # display directory path to open terminal in
+    pinf "\n--------Terminal-Start-Path--------"; echo "$dirPath"; pinf "--------Terminal--END--Path--------\n";
+
+    # For default "term" and "shell"
+    (x-terminal-emulator -e bash -c "cd \"${dirPath}\"; exec $SHELL";) >/dev/null 2>&1 &
+    
+    # For "gnome-term" and default "shell"
+    # gnome-terminal --working-directory="$dirPath"
+}
+
+currentWin() {
+    # Get the process ID (PID) of the currently focused window
+    win_pid=$(xprop -id $(xprop -root _NET_ACTIVE_WINDOW | awk '{print $5}') _NET_WM_PID | awk '{print $NF}');
+    # Get the name of the application of the currently focused window
+    app_name=$(ps -p $win_pid -o comm=);
+    inf "Current-Window: $app_name"
+}
+
+check() {
+    # Check if the application is a file manager
+    if [[ "$app_name" =~ ^(nautilus|nemo|caja|thunar)$ ]]; then
+        pmsg "File manager detected.."
+        
+        inf "Setting trap to restore clipboard contents.."
+        trap 'restoreClip "$actualClip"; err "Pre-exit"' INT TERM;
+        
+        inf "Simulating \"Ctrl+L\" & \"Ctrl+C\" to select copy path";
+        sleep 0.3 && { xdotool key "ctrl+l" && xdotool key "ctrl+c"; } || err "couldnt simulate \"Ctrl+L\" & \"Ctrl+C\"";
+        
+        # Get the path from the clipboard
+        currentPath=$(eclip);
+        restoreClip "$actualClip"
+
+        # logging fmDirectory path 
+
+        # opening "$currentPath"
+        termh "$currentPath" 
+
+    else
+        termh 
+    fi;
+}
+
+logOpen() {
+    # assigning values
+    lineNum=$1
+    log="$2"
+    $def_log="$def_log"
+
+    # if "$log" value is null then "$log=$def_log"'s value, provided "def_log" must be defined within or out of function 
+    log="${log:-~$def_log}"
+
+    check
+    if [ -f $log ]; then
+        if [ $lineNum -le $(wc -l < $log) ]; then
+            tail -n+$(( $(wc -l < $log) - $lineNum + 1 )) $log | head -n 1
+        else
+            # functions to export latest/oldest log/line
+            return_ltstLog() { inf "Returning latest/last entry from \"$log\""; tail -n 1 $log; }
+            return_oldstLog() { inf "Returning oldest/first entry from \"$log\""; head -n 1 $log; }
+
+            inf "Requested line > lines $(basename $log)."
+            return_ltstLog
+            #return_oldstLog
+        fi
+    else
+        echo "Log file not found at $log"
+    fi
+}
+
+PathHandle() {
+    # path: $1
+    # arg: $2
+
+    createFile() {
+        inf "creating file-\"$1\".."
+        mkdir $(dirname "$1") -p && touch "$1" || wrn "couldnt create file.."
+    }
+
+    createFolder() {
+        inf "creating directory-\"$1\".."
+        mkdir -p "$1" || wrn "couldnt create directory.." 
+    }
+
+    bkpDest() {
+        mv "$1/" "$1$2" || mv "$1" "$1$2:$(date +%Y.%m.%d:%H.%M)";
+    }
+
+    checkPath() {
+        # --signals usage for "$2"--
+        # "1" create file if doesnt exist.
+        # "2" create folder if doesnt exist.
+        # "3" create file if doesnt exist & if a folder exists then backup the folder and create file..
+        # "4" create folder if doesnt exist & if a file exists then backup the file and create folder..
+        if [ -e "$1" ]; then
+            # check if file exists.. 
+            if [ -f "$1" ]; then
+                #if folder signal detected then backup the file and create folder..
+                if [[ $2 == 4 ]]; then bkpDest "$1" ".f"; createFolder "$1";
+                else
+                    inf "\"File\" detected in destination-\"$1\".."
+                fi;
+            # check if folder exists..
+            elif [ -d "$1" ]; then
+                #if file signal detected then backup the folder and create file..
+                if [[ $2 == 3 ]]; then bkpDest "$1" ".d"; createFile "$1";
+                else
+                    inf "\"Directory\" detected in destination-\"$1\".."
+                fi;
+            else
+                alert "Destination is not a regular file or directory-\"$1\".."
+            fi;
+        else
+            inf "destination doesnt exists-\"$1\".."
+            if [[ $2 == 1 || $2 == 3 || -z "$2" ]]; then
+                createFile "$1"
+            elif [[ $2 == 2 || $2 == 4 ]]; then
+                createFolder "$1"
+            fi;
+        fi;
+    }
+    checkPath "$1" "$2";
+}
+
+#------------------------------FUNCTION-END----------------------------------
+
+# process args
+while getopts "d:p" opt; do
+    case "$opt" in
+        d ) # open terminal in defined path/dir
+            defPath="$OPTARG";
+            inf "navigating to $defPath";
+            termh "$defPath";
+            inf "DONE..\n\n"
+            exit 1;
+            ;;
+        f ) # overrides default log file
+            logFile=$OPTARG
+            ;;
+        p ) # open previous path from filemanager directory
+            lineNum=$OPTARG
+            fdLog=${fdLog:-~$def_fdLog}
+            get_log_line $fdLog $lineNum
+            exit 0
+            ;;
+
+    esac;
+    #statements
+done;
+
+# ------EXECUTION-LINE------
+
+# --MAIN--
+inf "Preserving clipboard Contents.."
+actualClip=$(eclip)
+
+# show clipboard contents
+#pinf "\n--------Clip-START-Content--------"; echo "$actualClip"; pinf "--------Clip--END--Content--------\n";
+
+currentWin && check;
+inf "DONE..\n\n"
+exit 0;

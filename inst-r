@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# @inf: install r programming language
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+# main code
+msg "initiating \"R\" installation script.."
+
+inf "configuring \"R\" repo.."
+echo "deb https://cran.rstudio.com/bin/linux/debian buster-cran40/\ndeb http://cloud.r-project.org/bin/linux/debian bullseye-cran40/" | sudo tee -a /etc/apt/sources.list.d/rstudio.list
+
+inf "fetching repo key.."
+wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | sudo tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc
+
+
+inf "instaling \"R\" package.."
+apt install r-base
+
+wget https://download1.rstudio.org/electron/bionic/amd64/rstudio-2023.03.0-386-amd64.deb
+apt install -f ./rstudio-2023.03.0-386-amd64.deb
+
+inf "done.."

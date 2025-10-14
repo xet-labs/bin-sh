@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+
+
+#release=$(lsb_release -cs)
+release=bullseye #buster
+gpgKeylink=https://download.docker.com/linux/debian/gpg
+gpgDest=/etc/apt/trusted.gpg.d/docker.gpg
+repoLink="deb [arch=$(dpkg --print-architecture) signed-by=$gpgDest] https://download.docker.com/linux/debian ${release} stable"
+linkDest=/etc/apt/sources.list.d/docker-ce.list
+
+#--------FUNCTIONS--------#
+
+linkPost() {
+	inf "> $(printf '%s\n' "$1" | tee $linkDest)"
+}
+
+
+dockInstall() {
+	msg "Installing Docker.."
+	inf "configuring dock repo.."
+	linkPost "$repoLink"
+	inf "configuring dock key.."
+	echo -e "gpg-source: $gpgKeylink"
+	sudo curl -fsSL $gpgKeylink | sudo gpg --dearmor -o $gpgDest
+	msg "configuring initial packages.."
+	sudo apt update -y 
+	sudo apt install apt-transport-https ca-certificates software-properties-common curl gnupg lsb-release -y
+	msg "installing docker.."
+	sudo apt-cache policy docker-ce
+	sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+	msg "cleaning leftovers.."
+	sudo apt autoremove -y && sudo apt  autoclean -y
+	inf "adding $(logname) to docker.."
+	sudo usermod -aG docker $(logname)
+	inf "done.."
+}
+
+enableDock() {
+	inf "configuring doc to start at boot.."
+	systemctl enable docker.service
+	systemctl enable docker.socket
+	systemctl enable containerd.service
+	inf "connecting dock.."
+	sudo systemctl enable docker --now
+	inf "dock online.."
+	inf "done.."
+}
+
+disableDock() {
+	inf "disabling doc.."
+	systemctl disable docker.service
+	systemctl disable docker.socket
+	systemctl disable containerd.service
+	inf "done.."
+}
+
+
+removeDock() {
+	msg "removing dock from system.." 
+	sudo apt --purge remove -y docker-ce docker-ce-cli containerd.io
+	inf "removing dock configs.."
+	sudo rm -rf /var/lib/docker
+	sudo rm -rf /var/lib/containerd
+	inf "removing leftovers.."
+	upgrade -xc
+	inf "done.."
+}
+
+#--------FUNCTIONS-END--------#
+
+while getopts "iedr" opt ;
+do
+	case $opt in
+	i) # install docker
+		dockInstall
+		exit 0
+		;;
+	e) # enable docker
+		enableDock
+		exit 0
+		;;
+	d) # enable docker
+		disableDock
+		exit 0
+		;;
+	r) # remove dock from system
+		removeDock;
+		;;
+	esac
+done

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# set default interface to "graphical mode" OR "TTY mode"
+ttyMode() {
+	sudo systemctl set-default multi-user.target
+	}
+	
+graphicalMode() {
+	sudo systemctl set-default graphical.target
+	}
+	
+getId() {
+	sudo systemctl get-default
+	}
+	
+	
+while getopts "t1:g1:i" opt; 
+do
+	case $opt in
+	i) #get current id
+		getId
+		;;
+	t) #set default boot to tty mode
+		ttyMode
+		;;
+	g) #set default boot to graphical mode
+		graphicalMode
+		;;
+	esac
+done
+

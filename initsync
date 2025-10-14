@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+wrn() { out "\e[0;35m--" "$@"; }
+alert() { out "\e[0;33m--" "${@} !!"; return 1; }
+palert() { out "\e[0;33m" "${@} !!"; }
+err() { out "\e[0;31m\n--" "${@} !!"; exit 2; }
+
+# -config-file
+config="syncconf.json"
+configdir="/xlvini/.conf/initbkp"
+
+conf="${configdir}/${config}"
+defconf="${CONFdir}/defaults.conf"
+
+
+#-- FUN-BEGIN --
+
+driveExist(){
+	#!/bin/bash
+
+	driveLabel=${1:-"--"}
+	driveUuid=${2:-"--"}
+
+	if [[ -z $driveLabel && -z $driveUuid ]]; then
+		inf "Need either label/uuid arg.."
+		exit 1
+	fi
+
+	driveExistId=0
+
+	outDriveName(){
+		(( $driveExistId == 1 )) && dLabel=${dLabel:-"$driveLabel"}
+		(( $driveExistId == 2 )) && dUuid=${dUuid:-"$driveUuid"}
+		(( $driveExistId == 3 )) && dLabel=${dLabel:-"$driveLabel"}; dUuid=${dUuid:-"$driveUuid"} 
+		echo ""
+		echo -e $(pinf "DriveLabel:")"$driveLabel"$(pinf ":")"$dLabel";
+		echo -e $(pinf "DriveUuid:")"$driveUuid"$(pinf ":")"$dUuid";
+		pinf "\nfd:$driveExistId"
+	}
+
+	getDriveLabel(){
+		#local driveUuid=$1
+		echo -e $(blkid -s LABEL -o value /dev/disk/by-uuid/"$driveUuid")
+	}
+
+	getDriveUuid(){
+		#local driveLabel=$1
+		blkid -s LABEL -o value /dev/disk/by-uuid/"$driveLabel"
+	}
+
+	if [[ -n $driveUuid && "$driveUuid" =~ (-|--) ]]; then
+		
+		# search match for UUID
+		if [[ -e /dev/disk/by-uuid/$driveUuid ]]; then
+			driveExistId=2	# -UUID found
+			
+			# -If UUID match detected then chech if label matches aswell
+			if [[ -n "$driveLabel" && ! "$driveLabel" =~ (-|--) ]] && $(getDriveLabel "$driveUuid" | grep -wq "$driveLabel"; ); then
+				driveExistId=3	# -UUID & label matched
+				inf "Perfect, Drive UUID & Label match detected.."
+				outDriveName
+				$?=0;
+			else 
+				if [[ -n $driveLabel && "$driveLabel" =~ (-|--) ]]; then
+					dLabel="$(getDriveLabel)"
+					inf "Unique, Drive UUID match detected.."
+					outDriveName
+					$?=0;
+				else
+					dLabel=$(getDriveLabel "$driveUuid";)
+					echo -e "$(inf "Unique, Drive UUID match detected with") $(palert "\"unmatched LABEL"\")"
+					outDriveName
+					$?=0;
+				fi
+			fi;
+		else # -If UUID unmatched then check if Label matches
+			if [[ -n $driveLabel && ! "$driveLabel" =~ (-|--) ]] && $(lsblk -o LABEL | grep -wq "$driveLabel"); then
+				driveExistId=1 	# Label matched
+				dUuid=$(blkid -o value -s UUID -t LABEL="$driveLabel")
+				echo -e "$(inf "Drive Label match detected with") $(palert "\"unmatched UUID"\")"
+				outDriveName
+				$?=2;
+			else
+				alert "Neither Drive UUID nor Label match was detected [$driveLabel: $driveUuid]"
+				$?=3;
+			fi;
+		fi;
+	else 
+		#check if only label matches and return actual UUID
+		if [[ -n $driveLabel && ! "$driveLabel" =~ (-|--) ]] && $(lsblk -o NAME,LABEL | grep -wq "$driveLabel"); then
+			driveExistId=1 	#label matched
+			dUuid=$(blkid -o value -s UUID -t LABEL="$driveLabel")
+			inf "Drive Label match detected.."
+			outDriveName
+			$?=2;
+		else
+			alert "Drive Label match wasnt detected [$driveLabel]"	
+			$?=4;
+		fi;
+	fi;	
+}
+
+
+
+locateDriveDev(){
+    local driveId="$1"
+    outDriveDev(){
+    	# check if driveId isnt NULL
+		if [[ -e $driveDev && -n $driveDev ]]; then 
+			echo -e "$driveDev"
+		else
+			Err_driveDev=1
+			alert "no drive found with id \"$driveId\""
+			return 1
+		fi
+    }
+
+	if [[ -z $driveId ]]; then alert "empty driveId"; return 1;fi
+
+	if echo $driveId | grep -E / >/dev/null 2>&1 ;then
+		driveDev=$driveId
+		outDriveDev && return $?
+	else
+		for driveIdType in /dev/disk/by-* ; do
+			if [[ -e "$driveIdType/$driveId" ]]; then
+				driveDev=$(readlink -f "$driveIdType/$driveId")
+				outDriveDev && return $?
+	    	fi
+	    done
+  		Err_driveDev=1
+		alert "no drive found with id \"$driveId\""
+		return 1  
+	fi
+}
+
+synchronize(){
+	srcFolder="$1"
+	destFolder="$2"
+	# Perform bidirectional synchronization using rsync
+    if [ -d "$srcFolder" ] || [ -d "$destFolder" ]; then
+    	inf "Synchronizing '$srcFolder' & '$destFolder'.."
+        rsync -aAvX --update "$srcFolder/" "$destFolder/"
+        rsync -aAvX --update "$destFolder/" "$srcFolder/"
+    else
+    	if [ -d "$srcFolder" ];then
+        	alert "Source folder does not exists."
+        	return 1;
+    	fi;
+    	if  [ -d "$destFolder" ]; then
+        	alert "Dstination folder does not exists."
+    	fi;    
+    fi
+}
+
+# -- FUN-END --
+
+controll(){
+	# mount and perfom bidirectoral sync
+	#!/bin/bash
+	timestamp=$(date +"%Y%m%d%H%M%S")
+
+	# Set the source and destination folders
+	srcFolder="$srcFolder"
+	destFolder="$destFolder"
+
+	srcDriveUuid=
+	destDriveUuid=
+
+	srcDriveLabel=
+	destDriveLabel=
+	if [[ -n driveUuid ]]; then
+		#check if UUID exists
+		if driveExist "$driveUuid"; then
+			DriveLabel=$(getDriveLabel "$driveUuid";)
+			mountPoint="/run/assetsync/${timestamp}/${DriveLabel:-"$driveUuid"}"
+	else 
+		if [[ -n $srcDriveLabel ]]; then
+			#check if srcDriveLabel exists
+			driveExist "$srcDriveLabel";
+		else
+			synchronize "$srcFolder" "$destFolder"
+		fi;
+	fi;
+	destDriveUuid="$destDriveUuid"
+	# mount drive to a mountpoint and perfom sync operation
+	if [[ -n $srcDriveUuid ]]; then
+		# generate mount point for 
+		DriveLabel=$(getDriveLabel "$driveUuid";)
+		mountPoint="/run/assetsync/${timestamp}/${DriveLabel:-"$driveUuid"}"
+		if [ ! -d "$mountPoint" ]; then
+		    mkdir -p "$mountPoint"
+		fi;
+		mount -U "$DriveUuid" "$mountPoint"
+		trap 'umount "$mountPoint" && rm -rf $mountPoint' INT TERM;	
+	fi
+	# Mount the device by UUID
+
+
+	# Check if the mount was successful
+	if [ $? -eq 0 ]; then
+	    # Perform bidirectional synchronization using rsync
+	    synch "$srcFolder" "$destFolder";
+	    # Unmount & cleanup
+	    umount "$mountPoint" && rm -rf $mountPoint
+	    inf "Synchronization completed.."
+	else
+	    alert "Failed to mount drive $srcDriveUuid!!"
+	fi;
+	exit 0
+}
+
+vals-unset() {
+    inf2 "Nulifying.vars"
+    var="id bkpSrc  bkpRepoL bkpArcName bkpRepoR keysrc locksrc passphrase encryption compression "
+    var_sort=$(sort <<< $var | tr '\n' ' ')
+    #showval "var"
+    unset $var || wrn "couldnt nullify \n$vars"
+}
+
+extract_conf() {
+
+    # extract values from [config].json
+    xtract() { eval "$1=\"$(jq -r ".directories[] | select(.id==\"$id\") | .$1" "$BKPconf" |sed 's/\bnull\b//g';)\""; }
+    for id in $(jq -r '.directories[].id' "${SYNCconf}"); 
+    do
+        xtract "tag";
+        xtract "status";
+        xtract "bkpSrc";
+        xtract "bkpRepoL";
+        xtract "bkpRepoR";
+        xtract "phrase";
+        xtract "keysrc";
+        xtract "locksrc";
+        xtract "encryption";
+        xtract "compression";
+
+        # -initiate backup    
+        BKPinit;
+    done;
+}

@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+
+this_user="${SUDO_USER:-${LOGNAME:-$(whoami)}}"
+this_home="${SUDO_HOME:-${HOME}}"
+this_path="${PWD:-$(pwd)}"
+this_path_real="$(readlink -f ${this_path})"
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+
+source "${scriptDir}/libxlvini"
+
+_vm_disk(){
+    local scope="${scope}"
+    diskDev="$1"
+    diskFile="$2"
+    diskVariant="${3:-RawDisk}"
+    diskFileFormat="${4:-vmdk}"
+
+    [ -z "${diskDev}" ] && serr "No block dev defined !!"
+    [ ! -b "${diskDev}" ] && swrn "Not a valid block dev '${diskDev}' !!"
+
+    [ "${diskFile}" == '--' ] && diskFile='';
+    #- Check diskFile extension and create or rename
+    if [[ -n "${diskFile}" ]]; then
+        if [[ -f "${diskFile}" ]]; then
+            if [[ "${diskFile##*.}" != "${diskFileFormat}" ]]; then
+                local new_diskFile="${diskFile}.${diskFileFormat}"
+                sinf "Renaming disk-file '..$(basename ${diskFile})' -> '..$(basename ${new_diskFile})'"
+                mv "${diskFile}" "${new_diskFile}"
+                diskFile="${new_diskFile}"
+            fi
+        else
+            if [[ "${diskFile##*.}" != "${diskFileFormat}" ]]; then
+                diskFile="${diskFile}.${diskFileFormat}"
+            fi
+        fi
+    else 
+        #- Generate a disk file path if none passed
+        diskFileLabel="$(blkid -s LABEL -o value "${diskDev}" 2>/dev/null | head -n1)"
+        diskFileLabel="${diskFileLabel:-$(blkid -s UUID -o value "${diskDev}" 2>/dev/null | head -n1)}"
+        diskFileLabel="${diskFileLabel:-$(blkid -s PARTUUID -o value "${diskDev}" 2>/dev/null | head -n1)}"
+        diskFileLabel="${diskFileLabel:-$(blkid -s PTUUID -o value "${diskDev}" 2>/dev/null | head -n1)}"
+        diskFileLabel="${diskFileLabel:-$(basename "${diskDev}")-$(date '+%H%M%S')}"
+        diskFileLabel="raw-${diskFileLabel}"
+        # echo "${diskFileLabel}"
+
+        if [[ -d "${this_home}/VirtualBox VMs" ]]; then
+            diskFileDir="${this_home}/VirtualBox VMs/raw-disk"
+        else
+            diskFileDir="${this_home}/VM/raw-disk"
+        fi
+        mkdir -p "${diskFileDir}"
+        (( EUID == 0 )) && (chown "${this_user}":"${this_user}" "${diskFileDir}"; chmod 775 "${diskFileDir}")
+        diskFile="${diskFileDir}/${diskFileLabel}.${diskFileFormat}"
+    fi
+
+    
+    if [[ -e "${diskFile}" ]]; then
+      swrn "Unregistering existing diskfile $(inf "'${diskFile}'")"
+      VBoxManage closemedium "${diskFile}" && rm -vf "${diskFile}" || serr "Unregister failed"
+      echo ""
+    fi
+    sinf "Mapping dev '${diskDev}' -> '${diskFile}'"
+    VBoxManage createmedium disk \
+    --variant="${diskVariant}" \
+    --format="$(echo "${diskFileFormat}" | tr '[:lower:]' '[:upper:]')" \
+    --filename="${diskFile}" \
+    --property RawDrive="${diskDev}" &&\
+    if [[ EUID -eq 0 ]]; then
+        sinf "Configuring group and permissions for user '${this_user}'"
+        usermod -aG disk "${this_user}"
+        chmod 660 "${diskDev}"
+        chown "${this_user}":"${this_user}" "${diskFile}"
+        chmod 660 "${diskFile}"
+    fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  dv|diskvariant|diskVariant|disk-variant)
+    diskVariant="$2"
+    shift 2
+    ;;
+  dff|diskfileformat|diskFileFormat|disk-file-format)
+    diskFileFormat="$2"
+    shift 2
+    ;;
+  mrd|maprawdisk|map-raw-disk)
+    diskDev="$2"
+    deskFile="$3"
+    vbox_mapRawDiskSig=1
+    shift 3
+    ;;
+  h | help)
+    echo -e "\nBe self-dependent !!"
+    exit 0
+    ;;
+  :)
+    art "Error: Option $1 requires an argument."
+    usage
+    exit 1
+    ;;
+  *)
+    alert "Error: Invalid option $1"
+    usage
+    exit 1
+    ;;
+  esac
+done
+
+[ ${vbox_mapRawDiskSig:-0} -eq 1 ] && ( scope="vmx-mrd"; _vm_disk \
+  "${diskDev}" \
+  "${diskFile}" \
+  "${diskVariant:-RawDisk}" \
+  "${diskFileFormat:-vmdk}"|| :
+)

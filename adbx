@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+def_ADB_fwd=("2300:2200" "5000:4000" "6445:445")
+def_ADB_rev=("2300:2200" "5000:4000" "6445:445")
+
+
+_adb_fwd(){
+  scope="adb-fwd"
+  if [ ${#ADB_fwd[@]} -eq 0 ]; then
+    if [ -n "$ADB_fwds" ]; then
+      sinf "Parsing string defined ports"
+      ADB_fwd=($ADB_fwds)
+    else
+      sinf "Using fallback ports"
+      ADB_fwd=("${def_ADB_fwd[@]}")
+    fi
+    else
+      sinf "Parsing array defined ports"
+  fi
+
+  sinf "Ports{ ${ADB_fwd[*]} }"
+
+  for pair in "${ADB_fwd[@]}"; do
+    local_port="${pair%%:*}"
+    remote_port="${pair##*:}"
+    # sinf "$local_port → $remote_port"
+    adb "${@}" forward "tcp:$local_port" "tcp:$remote_port"
+  done
+  # echo -e ""
+}
+
+_adb_rev(){
+  scope="adb-rev"
+  if [ ${#ADB_rev[@]} -eq 0 ]; then
+    if [ -n "$ADB_revs" ]; then
+      sinf "Parsing string defined ports"
+      ADB_rev=($ADB_revs)  # Convert space-separated string to array
+    else
+      sinf "Using fallback ports"
+      ADB_rev=("${def_ADB_rev[@]}")
+    fi
+  else
+    sinf "Parsing array defined ports"
+  fi
+
+  sinf "Ports{ ${ADB_rev[*]} }"
+  
+  for pair in "${ADB_rev[@]}"; do
+    remote_port="${pair%%:*}"
+    local_port="${pair##*:}"
+    # sinf "$remote_port → $local_port"
+    adb "${@}" reverse "tcp:$remote_port" "tcp:$local_port"
+  done
+  # echo -e ""
+}
+
+_adb_fix(){
+  scope=adb-fix
+  #- referrence
+  #- (https://developer.android.com/studio/run/device)
+
+  sinf "Fix err 'xxxxx no permissions (user in plugdev group; are your udev rules wrong?)'"
+
+  sinf "Adding '${this_user}' to 'plugdev' group"
+  usermod -aG plugdev "${this_user}"
+  
+  # sinf "Configuring udev rule"
+  # echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="22b8", ATTR{idProduct}=="2e81", MODE="0666", GROUP="plugdev", TAG+="uaccess"' | tee /etc/udev/rules.d/51-android.rules > /dev/null
+  # udevadm control --reload-rules
+  
+  sinf "Restarting adb server"
+  adb kill-server
+  adb start-server
+  adbFixSig=0
+}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  fix | --fix)
+    adbFixSig=1
+    shift
+    ;;
+  tcp | --tcp)
+    adbTcpSig=1
+    shift
+    _adb_fwd "$@"; _adb_rev "$@"; exit
+    ;;
+  -h | --help)
+    echo -e "\nBe self-dependent !!"
+    exit 0
+    ;;
+  :)
+    alert "Error: Option $1 requires an argument."
+    usage
+    exit 1
+    ;;
+  *)
+    alert "Error: Invalid option $1"
+    usage
+    exit 1
+    ;;
+  esac
+done
+
+
+[ ${adbFixSig:-0} -eq 1 ] && _adb_fix|| :
+[ ${adbTcpSig:-0} -eq 1 ] && (_adb_fwd "$@"; _adb_rev "$@"; exit) || :

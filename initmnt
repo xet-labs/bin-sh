@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+wrn() { out "\e[0;35m--" "$@"; }
+alert() { out "\e[0;33m--" "${@} !!"; return 1; }
+palert() { out "\e[0;33m" "${@} !!"; }
+err() { out "\e[0;31m\n--" "${@} !!"; exit 2; }
+
+
+#- server-mounts
+/server					/server										auto 	bind,nofail,noatime,x-gvfs-show		0	0
+
+/xlvini/shared.d		/server/xetindustries/shared.d/xlvini		auto 	bind,nofail,noatime,x-gvfs-hide		0	0
+/home/xet/Public 		/server/xetindustries/shared.d/public		auto 	bind,nofail,noatime,x-gvfs-hide		0	0
+/media/xet/datx/@dat 	/server/html/shared							auto 	bind,nofail,noatime,noauto,x-gvfs-hide		0	0
+
+#!/bin/bash
+
+# Check if the script is run as root
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root or with sudo."
+    exit 1
+fi
+
+# Define the path to the fstab-like file
+FSTAB_FILE="myfstab.txt"
+
+# Check if the fstab file exists
+if [ ! -e "$FSTAB_FILE" ]; then
+    echo "The fstab file '$FSTAB_FILE' does not exist."
+    exit 1
+fi
+
+# Read the fstab-like file line by line
+while IFS= read -r line; do
+    # Skip comments and empty lines
+    if [[ $line =~ ^\s*#.*$ || -z "$line" ]]; then
+        continue
+    fi
+
+    # Parse the line using whitespace as a delimiter
+    read -r -a fields <<< "$line"
+
+    # Check if there are at least 6 fields (as in /etc/fstab)
+    if [ "${#fields[@]}" -lt 6 ]; then
+        echo "Invalid line in $FSTAB_FILE: $line"
+        continue
+    fi
+
+    # Extract relevant fields
+    device="${fields[0]}"
+    mount_point="${fields[1]}"
+    fstype="${fields[2]}"
+    options="${fields[3]}"
+    dump="${fields[4]}"
+    pass="${fields[5]}"
+
+    # Check if the mount point exists, if not, create it
+    if [ ! -d "$mount_point" ]; then
+        echo "Creating mount point: $mount_point"
+        mkdir -p "$mount_point"
+    fi
+
+    # Mount the partition
+    mount -t "$fstype" -o "$options" "$device" "$mount_point"
+
+    # Check if the mount was successful
+    if [ $? -eq 0 ]; then
+        echo "Mounted $device to $mount_point"
+    else
+        echo "Failed to mount $device to $mount_point"
+    fi
+done < "$FSTAB_FILE"
+

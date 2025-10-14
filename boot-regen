@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+#- regenerate /boot dir
+pkg='linux-image-$(uname -r) base-files'
+
+sudo apt install --reinstall $pkg
+#sudo dpkg --reconfigure $pkg

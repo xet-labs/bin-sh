@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+# setup url for img
+url="https://t1.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url="${1}"&size="${2:-64}
+
+echo -e "url:" ${url}
+# extract filename from url
+filename=$(echo $(basename "$url") | cut -d'.' -f-1)
+filesize=$(echo $(basename "$url") | cut -d'=' -f2)
+filename=${filename}-favicon-${filesize}.png
+
+# download the file
+curl -o "$filename" "$url"&&open ${filename}

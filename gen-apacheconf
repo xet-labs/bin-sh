@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# @inf: apache site config generator
+
+# Define output colors
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+# Set defaults
+config_dir="/etc/apache2/sites-available"
+
+# Function to display usage information
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS] <arguments>
+
+Options:
+  -h, --help        Display this help message and exit
+  -c                Disable caching
+  -C                Configure perm for site-dir (CC for recursive)
+  -d <site files>   Site files directory
+  -n <domain>       Name of your site
+  -p <port>         Port number
+  -e                Enable site now
+  -r                Restart apache
+EOF
+}
+
+# Initialize variables
+ensiteSig=0
+hostSig=0
+permSig=0
+
+
+while getopts d:n:p:cCehr opt; do
+    case $opt in
+        d) # Site files directory
+            site_dir="${OPTARG}"
+            ;;
+        n) # Site name (site domain name)
+            site_domain="${OPTARG}"
+            ;;
+        p) # Port to access the site locally
+            site_port="${OPTARG}"
+            ;;
+        c) # Disable caching
+            discachingSig=1
+            ;;
+        C) # Change permission of the directory
+            ((permSig++))
+            ;;
+        e) # Enable site
+            ensiteSig=1
+            ;;
+        r) # Restart apache
+            restartSig=1
+            ;;
+        h | help)
+            usage
+            exit 0
+            ;;
+        :)
+            alert "Error: Option -$OPTARG requires an argument."
+            usage
+            exit 1
+            ;;
+        ?)
+            alert "Error: Invalid option -$OPTARG."
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Check if required parameters are passed
+if [[ -z $site_dir || -z $site_domain || -z $site_port ]]; then
+    alert "Three parameters are required: \"-d, -n, -p\""
+    usage
+    exit 1
+fi
+
+# Check if site directory exists
+if [ ! -d "$site_dir" ]; then
+    alert "Could not detect site directory."
+    inf "Creating one..."
+    read -p "$(wrn "Are you sure you want to proceed with the creation of the directory? (Y/n): ")" qs
+    if [[ $qs =~ ^[Yy]$ ]]; then
+        mkdir -p "$site_dir" || wrn "Directory creation failed for $site_dir"
+    fi
+fi;
+if [ $permSig != 0 ];then
+    # Configure owner and permissions
+    #echo ""
+    owner=www-data
+    perm=755
+    inf "Configuring [ Owner:$owner Permissions:$perm ] -- $site_dir"
+    if [ $permSig == "1" ];then
+        inf "Configuring dir [ ../ ]"
+        chown $owner:$owner "$site_dir"
+        chmod $perm "$site_dir"
+    else
+        inf "Configuring dir [ ../** ]"
+        chown -R $owner:$owner "$site_dir"
+        chmod -R $perm "$site_dir"
+    fi
+    echo ""
+fi;
+
+
+# Define config name
+config="${site_domain}.${site_port}.conf"
+config_path="${config_dir}/${config}"
+
+inf "generating config $config_path"
+# Generate Apache site configuration
+cat <<EOF > "$config_path"
+Listen ${site_port}
+
+<VirtualHost *:${site_port}>
+    ServerName ${site_domain}
+    ServerAlias www.${site_domain}
+    DocumentRoot ${site_dir}
+
+    <Directory ${site_dir}>
+        Options +FollowSymlinks +Indexes
+        AllowOverride All
+        Require all granted
+        DirectoryIndex index.php index.html
+
+        SetEnv HOME ${site_dir}
+        SetEnv HTTP_HOME ${site_dir}
+    </Directory>
+
+    $(if [[ $discachingSig == 1 ]]; then
+        cat <<CACHE_EOF
+        # -Disable caching
+        RewriteEngine On
+        <FilesMatch "\.(html|htm|js|css)$">
+            FileETag None
+            <IfModule mod_headers.c>
+                Header unset ETag
+                Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate"
+                Header set Pragma "no-cache"
+                Header set Expires "Wed, 12 Jan 1980 05:00:00 GMT"
+            </IfModule>
+        </FilesMatch>
+CACHE_EOF
+    fi)
+
+    ErrorLog \${APACHE_LOG_DIR}/${config}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${config}-access.log combined
+</VirtualHost>
+EOF
+echo ""
+
+# enable site on command 
+ if [ $ensiteSig == 1 ];then
+    inf "enabling site $config.."
+    # enable site
+    a2ensite ${config}
+    # url rewriting engine
+    a2enmod rewrite
+fi;
+
+# restart apache server on command
+if [ $restartSig == 1 ];then
+    inf "restarting apache-service.."
+    systemctl restart apache2.service
+fi;
+
+echo ""
+inf "Done.."

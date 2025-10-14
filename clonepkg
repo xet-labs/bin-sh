@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\e[0;34m#-" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+err() { out "\e[0;31m!! $@" && exit 0; }
+
+
+instDownloads() {
+	msg "installing packages from --$dpath.."
+	sudo dpkg -i $dpath/*.deb
+}
+
+
+dwnPkg() {
+	msg "cloning \'$pkgName\' to \'$dpath\'.."
+	sudo apt-get -d install $pkgName -o Dir::Cache::archives="$dpath" -y
+}
+
+
+
+#- setting vars
+pkgName=$1
+dpath=$2
+pkgfold=$pkgName/${pkgName}-$(date +%Y.%m.%d-%H.%M.%S)
+
+#- 
+if [ -z $dpath ]
+then
+	inf "!!no specific path defined" 
+	dpath=/home/$(logname)/Downloads/$pkgfold
+else #[ "$dpath" ] then
+	if [ "${dpath: -1}" == "/" ]; then
+		dpath="${dpath%?}"
+	fi
+	dpath=$dpath/$pkgfold
+fi
+
+#inf "configuring dir.."
+#echo $pkgfold
+(mkdir $dpath -p)||err "couldnt configure dir \'$dpath\'.."
+dwnPkg||err "couldnt fetch package !!.."
+
+sudo chmod a+rwx -R $dpath
+while getopts "i" opt;
+do
+	case "opt" in
+	i)
+		instDownloads
+
+	esac
+done
+
+inf "done.."
+
+#sudo apt --download-only -o Dir::Cache::archives=~/Documents/sshuttle/3 install sshuttle 
+
+
+
+
+
+
+

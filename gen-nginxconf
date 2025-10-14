@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# @inf: apache site config generator
+
+# Define output colors
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m--" "$@"; }
+pmsg() { out "\e[1;34m--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+pinf() { out "\e[0;2m" "$@"; }
+alert() { out "\e[0;35m--" "$@"; }
+wrn() { out "\e[0;33m--" "$@"; return 1; }
+err() { out "\e[0;31m\n--!! " "$@"; exit 2; }
+
+# Set defaults
+conf_dir="/etc/nginx/sites-available"
+
+# Function to display usage information
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS] <arguments>
+
+Options:
+  -h, --help                heellppp...
+  -d <site dir>             site files directory
+  -n <domain>               site name
+  -p <port>                 site port
+  -s <domain>:<port>:<dir>  site name port dir
+  -e                        enable site now
+  -r                        restart apache
+  -t                        gen a template "index.html" if not present
+  -c                        Disable caching
+  -C                        Configure perm for site-dir (CC for recursive)
+EOF
+}
+
+# Initialize variables
+ensiteSig=0
+hostSig=0
+permSig=0
+
+
+while getopts d:s:n:p:cCehr opt; do
+    case $opt in
+        d) # Site files directory
+            site_dir="${OPTARG}"
+            ;;
+        n) # Site name (site domain name)
+            site_domain="${OPTARG}"
+            ;;
+        p) # Port to access the site locally
+            site_port="${OPTARG}"
+            ;;
+        s) # site_domain site_port site_dir
+            IFS=":" read -r site_domain site_port site_dir<<< "${OPTARG}"
+            ;;
+        e) # Enable site
+            ensiteSig=1
+            ;;
+        r) # Restart nginx
+            restartSig=1
+            ;;
+        t) # generate template
+            tmplSig=1
+            ;;
+        m) # modify
+            editSig=1
+            ;;
+        c) # Disable caching
+            discachingSig=1
+            ;;
+        C) # Change permission of the directory
+            ((permSig++))
+            ;;
+        h | help)
+            usage
+            exit 0
+            ;;
+        :)
+            alert "Error: Option -$OPTARG requires an argument."
+            usage
+            exit 1
+            ;;
+        ?)
+            alert "Error: Invalid option -$OPTARG."
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+# Check if required parameters are passed
+if [[ -z $site_dir || -z $site_domain || -z $site_port ]]; then
+    alert "Three parameters are required: \"-d, -n, -p\""
+    usage
+    exit 1
+fi
+
+# Check if site directory exists
+if [ ! -d "$site_dir" ]; then
+    alert "Couldn't detect site directory."
+    # inf "Creating one..."
+    read -p "$(wrn "Proceed site directory creation? (Y/n): ")" qs
+    if [[ $qs =~ ^[Yy]$ ]]; then
+        mkdir -p "$site_dir" || wrn "Directory creation failed for $site_dir"
+    fi
+fi;
+
+# Define config name
+site="${site_domain}:${site_port}"
+site_name="${site_domain}.${site_port}"
+
+conf="${site_name}"
+conf_path="${conf_dir}/${conf}"
+
+inf "generating config $conf_path"
+# Generate Apache site configuration
+cat <<EOF > "$conf_path"
+server {
+    listen ${site_port};
+    server_name ${site_domain} www.${site_domain};
+
+    # -SSL configuration
+    # -Uncomment and configure the following lines if you have SSL certificates
+    # ssl_certificate /etc/letsencrypt/live/${site_domain}/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/${site_domain}/privkey.pem;
+    # include /etc/letsencrypt/options-ssl-nginx.conf;
+    # ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    root $site_dir;
+    index index.php index.html index.htm;
+
+
+    location / {
+        try_files \$uri \$uri/ =404;
+        #try_files \$uri \$uri/ /index.php?\$args;
+        
+        #proxy_pass http://backends;
+        #proxy_set_header Host \$host;
+        #proxy_set_header X-Forwarded-Proto \$scheme;
+        #proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        #proxy_set_header X-Real-IP \$remote_addr;
+        
+        #proxy_next_upstream error timeout invalid_header http_500 http_502 http_503 http_504;
+        
+        autoindex on;
+    }
+
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+
+        fastcgi_param DOCUMENT_ROOT \$realpath_root;
+        fastcgi_param SCRIPT_FILENAME \$realpath_root\$fastcgi_script_name;     
+
+        include fastcgi_params;
+    }
+
+
+    location ~ /\. {
+        deny all;
+    }
+
+    # -Logging
+    access_log /var/log/nginx/${site_name}.access.log;
+    error_log /var/log/nginx/${site_name}.error.log;
+}
+
+# Redirect HTTP to HTTPS
+#server {
+#    listen 80;
+#    server_name ${site_domain} www.${site_domain};
+#
+#    return 301 http://${site}$request_uri;
+#}
+
+EOF
+
+if [ "$tmplSig" == 1 ];then
+    inf "generating template [$site_dir/index.html]"
+
+    if [ -d "$site_dir" ] && [ ! -f "$site_dir/index.html" ]; then
+        cat <<EOF > "$site_dir/index.html"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Centered Heading</title>
+    <style>
+        body {
+            background-color: #f7f7f7;
+            display: flex;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        h1 {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1><b>${site}</b> up and rollin..</h1>
+</body>
+</html>
+
+EOF
+    fi;
+fi;
+
+
+echo ""
+
+# enable site on command 
+ if [ "$ensiteSig" == 1 ];then
+    if [[ -e /etc/nginx/sites-enabled/$conf ]]; then
+        inf "site already enabled.."
+    else
+        inf "enabling site"
+        ln -s ${conf_path} /etc/nginx/sites-enabled/
+    fi
+    nginx -t
+fi;
+
+if [ "$editSig" == 1 ];then
+    inf "editing $conf.."
+    subl $conf || nano $conf
+fi;
+
+# restart apache server on command
+if [ "$restartSig" == 1 ];then
+    inf "restarting nginx-service.."
+    systemctl reload nginx
+fi;
+
+echo ""
+inf "Done.."

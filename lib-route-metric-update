@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+route-metric-update() {
+    local IFACE="$1"
+    local NEW_METRIC="$2"
+
+    local CURRENT_ROUTE GATEWAY SOURCE_IP PROTOCOL CMD METRICS
+
+    # Get the current default route for the interface (lowest metric)
+    CURRENT_ROUTE=$(ip route show default dev "$IFACE" | sort -nk 8 | head -n 1)
+    METRIC=$(awk '/metric/ {for(i=1;i<=NF;i++) if($i=="metric") print $(i+1); exit}' <<< "$CURRENT_ROUTE")
+
+    if [[ "$METRIC" -eq "$NEW_METRIC" ]]; then
+        echo "Iface '$p_iface' already has highest route metric '$NEW_METRIC'."
+        exit
+    fi
+
+
+    if [[ -z "$CURRENT_ROUTE" ]]; then
+        echo "Error: No default route found for interface '$IFACE'."
+        exit 1
+    fi
+
+    # Extract components
+    GATEWAY=$(grep -oP 'via \K[0-9.]+' <<< "$CURRENT_ROUTE")
+    [[ -z "$GATEWAY" ]] && echo "Error: No gateway found." && return 1
+    SOURCE_IP=$(grep -oP 'src \K[0-9.]+' <<< "$CURRENT_ROUTE" || true)
+    PROTOCOL=$(grep -oP 'proto \K[a-zA-Z0-9]+' <<< "$CURRENT_ROUTE" || true)
+
+    # Construct new route command
+    ROUTE=("default" "via" "$GATEWAY" "dev" "$IFACE")
+    [[ -n "$PROTOCOL" ]] && ROUTE+=("proto" "$PROTOCOL")
+    [[ -n "$SOURCE_IP" ]] && ROUTE+=("src" "$SOURCE_IP")
+
+    # echo "Updating route: ${ROUTE[@]}"
+    ip route replace ${ROUTE[@]} metric $NEW_METRIC
+    METRICS=($(ip route show dev "$iface" default 2>/dev/null | awk '/metric/ {for(i=1;i<=NF;i++) if($i=="metric") print $(i+1)}'))
+    for m in "${METRICS[@]}"; do
+        [[ "$m" == "$NEW_METRIC" ]] && ip route del "${ROUTE[@]}" metric "$METRIC" && break
+    done
+}

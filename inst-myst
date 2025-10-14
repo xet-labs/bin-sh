@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")"
+source "${scriptDir}/libxlvini"
+
+# Runtime var
+scope=myst
+mystRestartSig=0
+
+mystSetup() {
+	#- Dependencies
+	smsg "Installing 'Mysterium-node'"
+	sinf "Configuring dependencies"
+	apt install -y apt-transport-https ca-certificates curl software-properties-common
+	#DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+
+	#- Ip fwd
+	sinf "Configuring firewall rules"
+	iptables -P FORWARD ACCEPT
+	{
+		cat >/etc/sysctl.d/ip-fwd.conf <<EOF
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+EOF
+	} && {
+		inf "Configured persistent ip fwd in '/etc/sysctl.d/ip-fwd.conf'" 
+		sysctl -p /etc/sysctl.d/ip-fwd.conf
+	} || \
+	serr "Failed to write '/etc/sysctl.d/ip-fwd.conf'"
+
+	#- myst key
+	sinf "Importing myst key.."
+	curl -fsSL https://mysteriumnetwork.github.io/node/gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/mysterium-node.gpg < yes
+
+	#sudo add-apt-repository ppa:mysteriumnetwork/node; sudo apt-get update; sudo apt install myst -y
+	#- -OR
+	bash -c "$(curl -s https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh)"
+
+	# sinf "Fixing trusted gpg err.."
+	# key_id=ECCB6A56B22C536D
+	# key_name='myst.gpg'
+	# apt-key export $key_id  | gpg --dearmour -o /tmp/$key_name
+	# # '--deleting existing key'
+	# apt-key del $key_id
+	# inf "cloning key to -/etc/apt/trusted.gpg.d/$key_name"
+	# mv /tmp/$key_name /etc/apt/trusted.gpg.d/
+
+	#- restarting myst service
+	mystRestartSig=1
+}
+
+mystPurge() {
+	conf="/var/lib/mysterium-node /etc/mysterium-node"
+
+	salrt "Purging 'Mysterium-node'"
+	systemctl stop mysterium-node
+	if dpkg -l | grep -q "^ii\s\+myst\s"; then
+		apt remove --purge -y myst
+		apt autoremove --purge -y
+	fi
+
+	inf "Purging myst configs '${conf}'"
+	rm -rf ${conf}
+}
+
+mystClone() {
+	#!/bin/bash
+	smsg "Importing myst config.."
+	mystSrc=${1:-"./mysterium"}
+
+	if [[ "$(basename $mystSrc)" != ".mysterium" ]]; then
+		if [[ -d $mystSrc/.mysterium ]]; then
+			mystSrc="$mystSrc/.mysterium"
+		else
+			serr "No valid config src found."
+			exit 1
+		fi
+	fi
+
+	sinf "Myst conf src '${mystSrc}'"
+
+	# defaults
+	mystUser="mysterium-node"
+	mystDirs=(
+		/var/lib/mysterium-node
+		/root/.mysterium
+	)
+	mystConfs=(
+		/etc/mysterium-node/config-mainnet.toml
+		/var/lib/mysterium-node/config-mainnet.toml
+		/var/lib/mysterium-node/.mysterium/config-mainnet.toml
+		/root/.mysterium/config-mainnet.toml
+	)
+
+	systemctl stop mysterium-node.service
+	for mystDir in ${mystDirs[@]}; do
+		rm -rf ${mystDir}/keystore ${mystDir}/.mysterium/keystore
+		cp -ar ${mystSrc}/. ${mystDir}/
+		cp -ar ${mystSrc} ${mystDir}/
+
+		if id "$mystUser" &>/dev/null; then
+			chown -R "$mystUser:$mystUser" "$mystDir"
+		else
+			wrn "User '$mystUser' not found, skipping chown on '$mystDir'"
+		fi
+
+	done
+
+	inf "Configuring configs.."
+	for mystConf in "${mystConfs[@]}"; do
+		[[ -e "$mystConf" ]] || continue
+		if [[ ! -f ${mystConf}.bkp ]]; then
+			cp $mystConf ${mystConf}.bkp
+		fi
+		sed -i 's/^active-services.*/active-services = "scraping,dvpn,wireguard,data_transfer"/' $mystConf
+		sed -i 's/UI_THEME_KEY.*/UI_THEME_KEY = "dark"/' $mystConf
+	done
+
+	mystRestartSig=1
+}
+
+while getopts "c:ir" opt; do
+	case $opt in
+	i)
+		mystSetup
+		;;
+	r)
+		mystPurge
+		;;
+	c)
+		src=$OPTARG
+		mystClone $src
+		;;
+	esac
+done
+
+[[ "${mystRestartSig:-0}" -eq 1 ]] && systemctl restart mysterium-node.service

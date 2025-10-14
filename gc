@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+#compile & run *.c code
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+err() { out "\e[0;31m!!" "$@"; }
+
+# Check if a filename was provided as an argument
+if [ -z "$1" ]; then
+    inf "Please provide a C file as an argument."
+    exit 1
+fi
+
+# Check if the file has a .c extension
+if [[ "$1" != *.c ]]; then
+    inf "The provided file is not a C file."
+    exit 1
+fi
+
+# Compile the file and generate an output file
+out="${1%.c}.out"
+inf "compiling $1 -> $out.."
+if (gcc "$1" -o "$out"); then
+    if [ $? -ne 0 ]; then  
+            echo -e ""
+        err "Compilation failed.."
+        exit 1
+    fi
+    #inf "Compilation done.."
+    inf "executing \"$(pwd)/$out\"\n"
+
+    # Run the output file if the compilation was successful
+    if ./"$out"; then
+        echo -e ""
+        inf "execution successful.."
+    else
+        echo -e ""
+        err "err detected.."
+    fi
+else
+    echo -e ""
+    err "Compilation failed.."
+    exit 1
+fi

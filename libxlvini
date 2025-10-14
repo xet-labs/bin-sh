@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+
+# set -euo pipefail  # Uncomment for strict mode if needed
+
+: "${TMPDIR:=/tmp}"                 # Default TMPDIR
+
+this_user="${SUDO_USER:-${LOGNAME:-$(whoami)}}"
+this_home="${SUDO_HOME:-${HOME:-/root}}"
+this_path="${PWD:-$(pwd)}"
+this_path_real="$(readlink -f "${this_path}")"
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "${scriptPath}")"
+scriptName=${0##*/}
+scriptBaseName="${scriptName%.*}"
+
+baseLogDirs=(
+  "/var/log"
+  "$HOME"
+  "$PWD"
+  "/tmp"
+  "$TMPDIR"
+)
+
+# Pick first writable dir for logs
+for dir in "${baseLogDirs[@]}"; do
+  if [[ -w "${dir}" ]]; then
+    if [[ "$dir" == "$HOME" ]]; then
+      def_logDir="${dir}/.${scriptBaseName}"
+    else
+      def_logDir="${dir}/${scriptBaseName}"
+    fi
+    break
+  fi
+done
+
+def_logFileName="${scriptName}.log"
+
+logDir="${logDir:-${def_logDir}}"
+logFileName="${logFileName:-${def_logFileName}}"
+logFile="${logFile:-${logDir}/${logFileName}}"
+
+# colors
+NC='\033[0m'
+BOLD='\033[1m'; B="${BOLD}"
+DARK='\033[2m'
+BLACK=${NC}'\033[0;90m'
+BLUE=${NC}'\033[0;34m'
+CYAN=${NC}'\033[0;36m'
+GREEN=${NC}'\033[0;32m'
+GREY=${NC}'\033[0;40m'
+MAGENTA=${NC}'\033[0;35m'
+RED=${NC}'\033[0;31m'
+YELLOW=${NC}'\033[0;33m'
+
+BASE16_THEME=${BASE16_THEME:-}
+[[ -n "$BASE16_THEME" ]] && BLACK="${NC}"
+
+msgCalled=0
+cc=()
+
+timestamp() { date '+%Y-%m-%d-%H%M%S'; }
+timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+# core gateway fn out()
+out() {
+  local pn="" scopeMsg=""
+  local c cx mode msg msg0 msg99 x
+  local beginNewLineSig=0 scopeSig=0
+
+  if [[ ${LogSig:-0} -eq 1 ]]; then
+    logTime="${LogTimestampColor:-${BLACK}}$(timestamp) "
+    lps=" "
+    [[ -d ${logDir} ]] || mkdir -p "${logDir}"
+    [[ -e ${logFile} ]] || touch "${logFile}"
+  fi
+
+  # handle optional flags
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      _bn) beginNewLineSig=1
+        [[ "${msgCalled:-0}" -gt 0 ]] && pn="\n"
+        ;;
+      _en) endNewLineSig=1 ;;
+      _scope) scopeSig=1 ;;
+      _scopeMsg) scopeMsg="$2"; shift ;;
+      *) break ;;
+    esac
+    shift
+  done
+
+  # Protect unset arguments
+  c="${1:-${NC}}"
+  msg="${2:-}"
+  mode="${3:-}"
+  cx="${4:-0}"
+  local msg0=""
+  (( ${scopeSig:-0} )) && scopeMsg="${scopeMsg:-${BLACK}[${BLUE}${BOLD}${Scope:-${scope:-$scriptName}}${BLACK}]-\c }"
+
+  msg="${pn}${logTime:-}${scopeMsg}${c}${msg}"
+
+  msg="$(sed "s/--\\\\c/${c//\\/\\\\}/g" <<< "$msg")"
+  msg="$(sed "s/-\\\\c/${c//\\/\\\\}/g" <<< "$msg")"
+
+  cc=("$c" "${cc[@]}")
+
+  x="${cc[$cx]:-${NC}}"
+
+  case "$mode" in
+    !n) msgStr="${msg0}${msg}${NC}" ;;
+    p)  msgStr="${msg0}${msg}${x}" ;;
+    pn) msgStr="\n${msg0}${msg}${NC}\n" ;;
+    *)  msgStr="${msg0}${msg}${NC}\n" ;;
+  esac
+
+  printf "%b" "${msgStr}" | {
+    if [[ ${LogSig:-0} -eq 1 ]]; then
+      tee -a "${logFile}"
+    else
+      cat
+    fi
+  }
+}
+
+# adds gap at line begining for non scoped func if $LogSig=1, else the gap is normally collapsed
+lps=""
+
+# convenience wrappers
+pout()   { out "${2:-${NC}}" "${1:-}" "p" "${3:-0}"; }
+
+debug()  { (( ${DebugSig:-0} )) && out "${GREY}${BOLD}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+sdebug() { (( ${DebugSig:-0} )) && out "_scopeMsg" "${BLACK}[${GREY}DBG${BLACK}]${NC} " "${GREY}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+msg()    { out "${BLUE}${BOLD}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+smsg()   { out "_scope" "_bn" "${BLUE}${BOLD}" "${1:-}" "${2:-}" "${3:-0}"; ((msgCalled++)); }
+
+inf()    { out "${BLACK}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+sinf()   { out "_scope" "${BLACK}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+dbg()    { out "${BLUE}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+sdbg()   { out "_scope" "${BLUE}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+alrt()   { out "${MAGENTA}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+salrt()  { out "_scope" "${MAGENTA}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+wrn()    { out "${YELLOW}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+swrn()   { out "_scope" "${YELLOW}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+err()    { out "${RED}" "${lps}${1:-}" "${2:-}" "${3:-0}"; return 1; }
+serr()   { out "_scope" "${RED}${BOLD}" "${1:-}" "${2:-}" "${3:-0}"; return 1; }
+
+fatal()  { out "${RED}" "${lps}${1:-}" "${2:-}" "${3:-0}"; exit 1; }
+sfatal() { out "_scope" "${RED}" "${1:-}" "${2:-}" "${3:-0}"; exit 1; }
+
+
+
+
+# check if required package exists
+RequireCmd=()
+require_cmd() {
+  local missing=()
+  for cmd in "${RequireCmd[@]}"; do
+    if ! command -v "$cmd" &>/dev/null; then
+      missing+=("$cmd")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    if [ -t 1 ]; then
+      wrn "Missing command(s): ${NC}${missing[*]}" >&2
+    else
+      printf '%s\n' "${missing[*]}"
+    fi
+    return 1
+  fi
+}
+
+RequirePkg=()
+require_pkg() {
+  local missing=()
+  local req name pkg
+
+  for req in "${RequirePkg[@]}"; do
+    if [[ $req == *:* ]]; then
+      IFS=: read -r name pkg <<< "$req"
+    else
+      name=$req
+      pkg=$req
+    fi
+
+    if ! dpkg -s "$pkg" &>/dev/null; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    if [ -t 1 ]; then
+      wrn "Missing package(s): ${NC}${missing[*]}" >&2
+    else
+      printf '%s\n' "${missing[*]}"
+    fi
+    return 1
+  fi
+}

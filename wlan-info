@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+# echo "Available Wi-Fi Adapters:"
+# echo
+
+for PHY in /sys/class/ieee80211/phy*; do
+    DEV_PATH=$(readlink -f "$PHY/device")
+    IFACE=$(basename "$(ls -1 "$PHY/device/net" 2>/dev/null | head -n 1)" 2>/dev/null)
+    MAC="$(cat "$PHY/device/net/$IFACE/address" 2>/dev/null)" 
+    MAC_PHY="$(cat "$PHY/macaddress" 2>/dev/null)"
+
+    [[ -z "$IFACE" ]] && continue
+
+    # Get Vendor and Device IDs
+    VENDOR_ID=$(cat "$PHY/device/vendor" 2>/dev/null | sed 's/^0x//')
+    DEVICE_ID=$(cat "$PHY/device/device" 2>/dev/null | sed 's/^0x//')
+
+    # Get vendor/device names via udevadm
+    UDEV_INFO=$(udevadm info -q all -p "$DEV_PATH" 2>/dev/null)
+    DRIVER=$(echo "$UDEV_INFO" | grep -E '^E: DRIVER=' | cut -d= -f2-)
+    VENDOR_NAME=$(echo "$UDEV_INFO" | grep -E '^E: ID_VENDOR=' | cut -d= -f2-)
+    VENDOR_DB=$(echo "$UDEV_INFO" | grep -E '^E: ID_VENDOR_FROM_DATABASE=' | cut -d= -f2-)
+    DEVICE_NAME=$(echo "$UDEV_INFO" | grep -E '^E: ID_MODEL=' | cut -d= -f2-)
+    DEVICE_DB=$(echo "$UDEV_INFO" | grep -E '^E: ID_MODEL_FROM_DATABASE=' | cut -d= -f2-)
+
+    [[ -n "$VENDOR_DB" ]] && VENDOR_NAME="$VENDOR_DB"
+    [[ -n "$DEVICE_DB" ]] && DEVICE_NAME="$DEVICE_DB"
+
+    [[ -z "$VENDOR_NAME" ]] && VENDOR_NAME="Unknown"
+    [[ -z "$DEVICE_NAME" ]] && DEVICE_NAME="Unknown"
+
+    # Detect adapter type
+    if [[ "$DEV_PATH" == *usb* ]]; then
+        TYPE="USB"
+    else
+        TYPE="Built-in"
+    fi
+
+    scope=$IFACE
+
+    sinf "${NC}$TYPE--\c $DEVICE_NAME"
+    echo "  Iface:      $IFACE"
+    echo "  Device:     $DEVICE_NAME"
+    echo "  DRIVER:     ${DRIVER:-Unknown}"
+    echo "  Vendor:     $VENDOR_NAME"
+    echo "  MAC phy:    ${MAC_PHY:-Unknown}"
+    echo "  MAC cur     ${MAC:-Unknown}"
+    echo "  Device id:  ${DEVICE_ID:-Unknown}"
+    echo "  Vendor id:  ${VENDOR_ID:-Unknown}"
+    echo "  Path:       $DEV_PATH"
+    echo
+done

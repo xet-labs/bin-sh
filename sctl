@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+
+sctl(){
+    actions=$1
+    shift
+
+    for ((i=0; i<${#actions}; i++)); do
+        local char="${actions:$i:1}"
+        case "$char" in
+            e) systemctl enable "$@" ;;
+            l) systemctl reload "$@" ;;
+            r) systemctl restart "$@" ;;
+            x) systemctl stop "$@" ;;
+            d) systemctl disable "$@" ;;
+            m) systemctl mask "$@" ;;
+            u) systemctl unmask "$@" ;;
+            s) systemctl status "$@" ;;
+            *) echo "Invalid action: $char. Usage: srvc|service {e(enable)|r(restart)|x(stop)|d(disable)|m(mask)|u(unmask)|s(status)}" ;;
+        esac
+    done
+}
+
+
+sctl "$@"

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+
+source "${scriptDir}/libxlvini"
+
+arg="$@"
+scriptDir="$(dirname $(readlink -f "${BASH_SOURCE[0]}"))";
+export GNIREHTET_APK="${scriptDir}/../../app.res/gnirehtet/gnirehtet.apk"
+
+
+
+case $1 in
+    java)
+        shift
+        sinf "java"
+        java -jar "${scriptDir}/../../app.res/gnirehtet/gnirehtet.jar" "${@}"
+        ;;
+    *)
+        sinf "rust"
+        exec "$scriptDir/xbin" gnirehtet "${@}"
+        ;;
+esac

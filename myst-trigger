@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+# -defaults
+logFile="/var/log/${0##*/}.log"
+trigFile="/etc/NetworkManager/dispatcher.d/99-myst-trigger"
+
+
+args="$@"
+interface="$1"
+
+# -get all default routes as an array
+interfaces=$(ip route show default | grep -Po '(?<=dev\s)\w+' | tr '\n' ' ' )
+IFS=' ' read -ra interfaces_array <<< "$interfaces"
+
+#- myst-trigger setup
+mystTriggerSetup(){
+    pmsg "setting up myst trigger.."
+    inf "Dest: $trigFile"
+
+    cat <<EOF > "$trigFile"
+#!/bin/bash
+
+case "\$2" in
+    up)
+        # executed when a network connection is established
+        $(which myst-trigger) \$@
+        ;;
+    down)
+        # executed when a network connection is lost
+        ;;
+esac
+
+exit 0
+EOF
+
+    chmod +x $trigFile
+}
+
+if [[ $1 == "--setup" ]];then
+    mystTriggerSetup;
+    exit;
+fi;
+
+if [[ $1 == "--remove" ]];then
+    inf "removing myst-trigger file.."
+    inf "Dest: $trigFile"
+    rm $trigFile
+    exit;
+fi;
+
+
+logMyst() {
+    # Generate log file if not present
+    if [[ ! -e $logFile ]]; then
+        touch "$logFile"
+    fi
+
+    echo -e "$@" | tee -a $logFile
+}
+
+logMyst "\n\n------- $(date) -------"
+logMyst "$(echo -n $(inf "interface: ${interface:---}") "|" $(inf "interfaces: ${interfaces:---}") "|" $(inf "args: ${args:---}") )"
+
+# sleep 2
+mystRes() {
+    mystConfs=(
+        /etc/mysterium-node/config-mainnet.toml
+        /var/lib/mysterium-node/config-mainnet.toml
+        /var/lib/mysterium-node/.mysterium/config-mainnet.toml
+        /root/.mysterium/config-mainnet.toml
+    )
+
+    logMyst "$(inf "stopping myst..")"
+    sudo systemctl stop mysterium-node.service
+
+    logMyst "$(inf "configuring configs..")"
+    for mystConf in "${mystConfs[@]}" ; do
+        if [[ ! -f ${mystConf}.bkp ]];then cp $mystConf ${mystConf}.bkp; fi;
+        logMyst "$(echo -e "$mystConf")"
+        sed -i 's/^active-services.*/active-services = "scraping,dvpn,wireguard,data_transfer"/' $mystConf
+        sed -i 's/UI_THEME_KEY.*/UI_THEME_KEY = "dark"/' $mystConf
+    done;
+
+
+    if systemctl restart mysterium-node.service; then
+        logMyst "$(pmsg "mysterium-node restarted")"
+    else
+        logMyst "$(wrn "Failed to restart mysterium-node")"
+    fi;
+}
+
+
+# abort if the mysterium-node.service is disabled/masked
+if [[ ! "$(systemctl is-enabled mysterium-node.service)" == "enabled" ]]; then
+    logMyst "$(alrt "myst wasnt enabled, so not restarting")"
+    exit 1
+fi
+
+#- Main-code
+interfaces=$(ip route show default | grep -Po '(?<=dev\s)\w+' | tr '\n' ' ' )
+IFS=' ' read -ra interfaces_array <<< "$interfaces"
+
+for iface in "${interfaces_array[@]}"; do
+    if [[ "$interface" == "$iface" ]]; then
+        if ! curl -s ifconfig.me &>/dev/null; then
+            logMyst "$(alrt "NO-INTERNET mysterium-node wasn't restarted")"
+        fi
+        
+        mystRes
+        exit 0  # Exit successfully if the interface matches
+    fi
+done
+
+logMyst "Improper-dev mysterium-node wasn't restarted"
+exit 1  # Exit with an error if no matching interface is found

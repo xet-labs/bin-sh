@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#set -euo pipefail # Uncomment for strict mode
+
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "$scriptPath")"
+scriptName="${0##*/}"
+source "${scriptDir}/libxlvini"
+
+# --- DEFAULTS ---
+clfConfd="/etc/cloudflared"
+active_pids=()
+
+# --- ARG PARSING ---
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--dir|d|dir)
+            clfConfd="$2"
+            shift 2
+            ;;
+        --nolog|nolog)
+            noLogSig=1
+            shift
+            ;;
+        --jsonlog|jsonlog)
+            jsonLogSig=1
+            shift
+            ;;
+        --run|run)
+            runSig=1
+            shift
+            ;;
+        si|--single-instance|single-instance)
+            singleInstanceSig=1
+            shift
+            ;;
+        --osarc|--osarchive|osarc|osarchive)
+            "$appMods/osarc" "$@"
+            exit 0
+            ;;
+        -h|--help)
+            echo -e "\nBe self-dependent !!"
+            exit 0
+            ;;
+        :)
+            salrt "Error: Option $1 requires an argument."
+            usage
+            exit 1
+            ;;
+        *)
+            salrt "Error: Invalid option $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+[[ -n "${logDir:-}" ]] && [[ ! -d "$logDir" ]] && mkdir "$logDir"
+
+# Exec all tunel config.yml
+clfExecAll() {
+    
+    # Exit if single instance mode is enabled and cloudflared is already running
+    [[ "${singleInstanceSig:-0}" -eq 1 ]] && pgrep -x "cloudflared" >/dev/null && exit
+
+    local config confFile logFile logFileJson pid
+    active_pids=()
+
+    shopt -s nullglob
+    local configs=("${clfConfd}"/*.yml)
+    shopt -u nullglob
+
+    if [[ ${#configs[@]} -eq 0 ]]; then
+        swrn "No tunnel configs found in '${clfConfd}'"
+        return 0
+    fi
+
+    for config in "${configs[@]}"; do
+        # Prep log files
+        confFile="$(basename "$config")"
+        logFile="${logDir:-/dev/null}/${confFile%.yml}.log"
+        logFileJson="${logDir:-/dev/null}/${confFile%.yml}.json.log"
+        # Making sure if log dir isnt available then cloudflared wont exit unexpectedly 
+        [[ ! -d $(basename "${logFile}") ]] && logFile="/dev/null"
+        [[ ! -d $(basename "${logFileJson}") ]] && logFileJson="/dev/null"
+        # Handle nolog
+        if (( ${noLogSig:-0} )); then
+            logFile="/dev/null"
+            logFileJson="/dev/null"
+        fi
+
+        # Prep cloudflared args
+        local args=(
+            --protocol http2
+            --no-autoupdate
+            --config "$config"
+        )
+        (( ${jsonLogSig:-0} )) && \
+        [[ -d $(basename "${logFileJson}") ]] && \
+        args+=(--logfile "$logFileJson")
+        
+        # Run cloudflared instance in background
+        (
+            cloudflared "${args[@]}" tunnel run > "$logFile" 2>&1
+        ) &
+        pid=$!
+
+        sleep 0.5
+        if kill -0 "$pid" 2>/dev/null; then
+            active_pids+=("$pid")
+            sinf "\e[0m>--\c Tunnel exe, PID: $pid '$config'"
+        else
+            scrit "Tunnel exited early or failed for config '\e[1m$config--\c'"
+        fi
+    done
+
+    if [[ "${#active_pids[@]}" -gt 0 ]]; then
+        sinf "Tunnels running, PIDs: ${active_pids[*]}"
+        [[ "${noLogSig:-0}" -ne 1 ]] && sinf "Logs: ${logDir}/*"
+    fi
+}
+
+# --- EXECUTION ---
+if [[ "${runSig:-0}" -eq 1 ]]; then
+    clfExecAll
+fi
+
+# --- WAIT FOR TUNNELS ---
+if [[ "${#active_pids[@]}" -gt 0 ]]; then
+    wait "${active_pids[@]}"
+fi

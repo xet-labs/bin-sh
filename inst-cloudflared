@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#x-:
+
+out() { printf "$1$2\e[0m\n"; }
+msg() { out "\n\e[1;34m#--" "$@"; }
+inf() { out "\e[0;2m--" "$@"; }
+err() { out "\e[0;31m!!!" "$@"; }
+
+clfRepo() {
+	msg "Setting up Cloudflared repository.."
+	inf "Adding Cloudflare GPG key.."
+	if curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null; then
+		inf "Key downloaded successfully"
+	else
+		err "Error downloading key"
+		exit 1
+	fi
+
+	inf "Adding this repo to your APT sources.."
+	if echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared bullseye main' | tee /etc/apt/sources.list.d/cloudflared.list; then
+		inf "Repo added successfully"
+	else
+		err "Error adding repo"
+		exit 1
+	fi
+}
+
+clfDocker() {
+	inf "Installing Cloudflared Docker image.."
+	if docker pull cloudflare/cloudflared:latest; then
+		inf "Cloudflared Docker image installed successfully"
+	else
+		err "Error installing Cloudflared Docker image"
+		exit 1
+	fi
+}
+
+clfDeb() {
+	inf "Installing Cloudflared Debian package.."
+	if wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && dpkg -i cloudflared-linux-amd64.deb && rm -f cloudflared-linux-amd64.deb; then
+		inf "Cloudflared Debian package installed successfully"
+	else
+		err "Error installing Cloudflared Debian package"
+		exit 1
+	fi
+}
+
+# Print usage information if no arguments are provided
+if [[ $# -eq 0 ]]; then
+	msg "Usage: $0 [options]"
+	msg "Options:"
+	msg "  -i   Download & Install Cloudflared Debian package"
+	msg "  -d   Install Cloudflared Docker image"
+	msg "  -a  Add Cloudflared repository to APT sources"
+	exit 0
+fi
+
+# Parse command-line options
+while getopts aidg opt; do
+	case $opt in
+		a) # add clf repo
+			clfRepo
+			;;
+		i) #add clf repo and install cloudflared
+			clfRepo
+			inf "Installing cloudflared.. "
+			apt update && apt install -y cloudflared
+			;;
+		g) # Install Cloudflared Debian package
+			clfDeb
+			;;
+		d)
+			clfDocker
+			;;
+		*)
+			err "Invalid option: $1"
+			exit 1
+			;;
+	esac
+done

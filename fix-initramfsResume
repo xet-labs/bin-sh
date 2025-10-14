@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+#- fix for initramfs-resume id
+
+#file=/etc/initramfs-tools/conf.d/resume
+#sudo blkid|grep swap
+#echo "replace UUID with current swap uuid "
+#sleep 5
+#(sudo gnome-text-editor $file)||sudo nano $file
+printf "RESUME=UUID=$(blkid | awk -F\" '/swap/ {print $2}')\n" | sudo tee /etc/initramfs-tools/conf.d/resume\
+
