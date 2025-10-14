@@ -16,7 +16,7 @@ while getopts r:b: opt; do
 		r ) # receive message
 			recv "$OPTARG"
 			;;
-		b ) # broadcast message
+		c ) # broadcast message
 			cast "$OPTARG"
 			;;
 	esac

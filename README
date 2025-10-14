@@ -1,0 +1,16 @@
+
+## bin/sh
+
+### Shell Utilities
+
+This directory contains Bash scripts for advanced Linux/Unix system operations, mounting, and chroot management.
+
+| Script            | Description                                                                                                                 |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **chrootx**       | Safely mounts and chroots into disk images or directories. Handles `/proc`, `/sys`, `/dev`, and loop devices automatically. |
+| **mkmount**       | Creates temporary mountpoints safely under `/mnt/tmp` or `/run/mount`.                                                      |
+| **umountsafe**    | Unmounts target directories with retry and dependency awareness (reads from `/proc/mounts`).                                |
+| **loopinfo**      | Displays loop device information for mounted images.                                                                        |
+| **is-mountpoint** | Checks if a directory is an active mountpoint.                                                                              |
+| **mountdev**      | Mounts specific partitions from block devices interactively.                                                                |
+| **bindmount**     | Creates bind mounts and automatically unmounts on exit.                                                                     |
