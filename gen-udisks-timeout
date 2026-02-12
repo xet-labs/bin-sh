@@ -1,0 +1,47 @@
+#!/bin/bash
+
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptName=${0##*/}
+
+
+DRIVE_ID="$1"
+DRIVE_CONFIG="/etc/udisks2/${DRIVE_ID}.conf"
+UDEV_CONFIG="/etc/udev/rules.d/${scriptName}.rules"
+
+
+inst_udev_rule(){
+    mkdir -p $(dirname "${UDEV_CONFIG}")
+
+    cat <<EOF > "$UDEV_CONFIG" 
+KERNEL=="sd*", SUBSYSTEM=="block", ACTION=="add", \
+  ATTR{queue/rotational}=="1", \
+  ENV{ID_SERIAL}!="", \
+  RUN+="${scriptPath} %E{ID_SERIAL}"
+EOF
+
+    udevadm control --reload-rules
+    udevadm trigger
+    
+    echo "Installed udev rule: $UDEV_CONFIG"
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --install-udev-rule)
+        inst_udev_rule;;
+    esac
+    shift
+done
+
+# Skip if file already exists
+[ -f "$DRIVE_CONFIG" ] && exit 0
+
+mkdir -p $(dirname "${DRIVE_CONFIG}")
+
+cat > "$DRIVE_CONFIG" <<EOF
+[ATA]
+StandbyTimeout=6
+EOF
+
+chmod 600 "$DRIVE_CONFIG"

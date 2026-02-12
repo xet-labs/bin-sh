@@ -7,22 +7,16 @@ inf() { out "\e[0;2m--" "$@"; }
 err() { out "\e[0;31m!!!" "$@"; }
 
 clfRepo() {
-	msg "Setting up Cloudflared repository.."
-	inf "Adding Cloudflare GPG key.."
-	if curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null; then
-		inf "Key downloaded successfully"
-	else
-		err "Error downloading key"
-		exit 1
-	fi
+# Add cloudflare gpg key
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
 
-	inf "Adding this repo to your APT sources.."
-	if echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared bullseye main' | tee /etc/apt/sources.list.d/cloudflared.list; then
-		inf "Repo added successfully"
-	else
-		err "Error adding repo"
-		exit 1
-	fi
+# Add this repo to your apt repositories
+# Stable
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+# Nightly
+#echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://next.pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+
 }
 
 clfDocker() {

@@ -8,6 +8,7 @@ this_user="${SUDO_USER:-${LOGNAME:-$(whoami)}}"
 this_home="${SUDO_HOME:-${HOME:-/root}}"
 this_path="${PWD:-$(pwd)}"
 this_path_real="$(readlink -f "${this_path}")"
+
 scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
 scriptDir="$(dirname "${scriptPath}")"
 scriptName=${0##*/}

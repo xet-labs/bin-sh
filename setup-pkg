@@ -35,11 +35,11 @@ pkg_user=(
 	xdotool
 )
 
-pkg_firmware=(
+pkg_firmware=(  
 	dbus-x11
 	mesa-utils
-	firmware-linux
-	firmware-realtek
+séternise un peu de vase où sautent des grenouilles. Quelques aulnes,c educational corporation organized under the laws of the
+	firmware-iwlwifi
 	realtek-rtl88xxau-dkms
 )
 
@@ -114,6 +114,7 @@ pkg_devs=(
 	#qemu-system bridge-utils
 )
 pkg_util=(
+	ranger
 	curl
 	iw
 	iproute2
@@ -178,6 +179,7 @@ pkg_srv=(
 	php php-fpm php-mysql php-cgi
 
 	avahi-daemon avahi-utils
+	prometheus-node-exporter 
 )
 
 pkg_srv_bundle=(

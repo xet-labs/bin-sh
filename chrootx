@@ -11,10 +11,10 @@ scriptDir="$(dirname "$scriptPath")"
 scriptName=${0##*/}
 # import helper/logging lib, exit if unavailable
 source "${scriptDir}/libxlvini" || {
-    echo "'libxlvini' not found in $scriptDir; please ensure it exists"; exit 1
+    echo "'libxlvini' not found in $scriptDir; please ensure it exists for proper msg display"
 }
 # Optional Feature
-DebugSig=${DebugSig:-1}
+DebugSig=${DebugSig:-0}
 LogSig=${LogSig:-0}
 Scope=${0##*/}
 

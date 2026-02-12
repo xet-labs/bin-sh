@@ -49,7 +49,7 @@ for PHY in /sys/class/ieee80211/phy*; do
     echo "  DRIVER:     ${DRIVER:-Unknown}"
     echo "  Vendor:     $VENDOR_NAME"
     echo "  MAC phy:    ${MAC_PHY:-Unknown}"
-    echo "  MAC cur     ${MAC:-Unknown}"
+    echo "  MAC cur:    ${MAC:-Unknown}"
     echo "  Device id:  ${DEVICE_ID:-Unknown}"
     echo "  Vendor id:  ${VENDOR_ID:-Unknown}"
     echo "  Path:       $DEV_PATH"

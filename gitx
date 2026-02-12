@@ -30,6 +30,7 @@ _git_sync(){
     gitMsg="sync-${gitMsg}"
     committed=0
 
+    echo ""
     
     if ! git diff --quiet || ! git diff --cached --quiet; then
         sinf "${_branch} 💾 Committing changes '${this_path_real}' - '$gitMsg'"
@@ -109,47 +110,50 @@ _git_scan_repo() {
 
 
 usage() {
-    echo "Usage: $(basename "$0") -m <commit-message>"
-    echo "Options:"
-    echo "  -m          Commit message (optional)"
-    echo "  -b          Branch (optional)"
-    echo "  -s|sync     Sync changes"
-    echo "  -h          Display this help message"
+    cat << EOF
+Usage: $(basename "$0") -m <commit-message>
+Options:
+    -m              Commit message (optional)
+    -b              Branch (optional)
+    -s|sync         Sync changes
+    -h              Display this help message
+    add-safe-dir    Safe dir
+EOF
 }
 
 #- Parse args
 while [[ $# -gt 0 ]]; do
     case $1 in
+        add-safe-dir)
+            gitAddSafeDirSig=1 ;;
         d|-d|dir|--dir)
             gitDir="$2";
-            shift 2 ;;
+            shift ;;
         depth|--depth)
             gitDepth="$2"
-            shift 2 ;;
+            shift ;;
         b|-b|branch)
             gitBranch=$2
-            shift 2 ;;
+            shift ;;
         m|-m|msg)
             gitMsg=$2
-            shift 2 ;;
+            shift ;;
         t|-t|tag)
             gitTag=$2
-            shift 2 ;;
+            shift ;;
         cot|--cot|checkout-tag)
-            gitCheckoutTagSig=1
-            shift ;;
+            gitCheckoutTagSig=1 ;;
         s|-s|--sync|sync)
-            gitSyncSig=1
-            shift ;;
+            gitSyncSig=1 ;;
         ls|lr|listrepo|--listrepo)
-            gitListRepoSig=1
-            shift ;;
+            gitListRepoSig=1 ;;
         h|--help)
             usage
             exit 0 ;;
         *)
             alert "Invalid option $1"; usage; exit 1 ;;
     esac
+    shift
 done
 
 #- Set default commit message and branch if not provided
@@ -165,6 +169,8 @@ gitMsg="${gitMsg:+$gitMsgMeta $gitMsg}"
 gitMsg="${gitMsg:-$gitMsgMeta:$(date '+%H%M%S')}"
 
 
+
+[ ${gitAddSafeDirSig:-0} -eq 1 ] && git config --global --add safe.directory "${gitDir}"
 [ ${gitListRepoSig:-0} -eq 1 ] && _git_scan_repo "${gitDir:-$PWD}" "${gitDepth:-4}"|| :
 [ ${gitCheckoutTagSig:-0} -eq 1 ] && _git_checkout_tag || :
 [ ${gitSyncSig:-0} -eq 1 ] && _git_sync || :

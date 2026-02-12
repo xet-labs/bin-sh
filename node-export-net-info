@@ -1,0 +1,104 @@
+#!/bin/bash
+# export currently connected ssid
+
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "${scriptPath}")"
+scriptName=${0##*/}
+scriptBaseName="${scriptName%.*}"
+source "${scriptDir}/libxlvini" || {
+    echo "'libxlvini' not found in $scriptDir; please ensure it exists for proper msg display"
+}
+OUT_D="/var/lib/node_exporter/textfile_collector"
+OUT_FILE="${OUT_D}/${scriptBaseName}.prom"
+SERVICE_FILE="/etc/systemd/system/${scriptBaseName}.service"
+SERVICE_TIMER_FILE="/etc/systemd/system/${scriptBaseName}.timer"
+[[ ! -d "$OUT_D" ]] && mkdir -p "$OUT_D"
+[[ -d "$OUT_FILE" ]] && rm -rf "$OUT_FILE"
+[[ ! -f "$OUT_FILE" ]] && mkdir -p $(dirname "$OUT_FILE")
+
+inst_service(){
+    sinf "installing service ${NC}${SERVICE_FILE}"
+    # install service
+cat >"${SERVICE_FILE}"<< EOF
+[Unit]
+Description=Collect WiFi info for Node Exporter
+
+[Service]
+Type=oneshot
+ExecStart=/x/bin/sh/${scriptName}
+EOF
+
+    sinf "installing timer   ${NC}${SERVICE_TIMER_FILE}"
+# install timer
+cat >${SERVICE_TIMER_FILE}<<EOF
+[Unit]
+Description=Run WiFi exporter every 1 minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+Unit=${scriptBaseName}.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+
+exit 
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --install-service) inst_service;;
+    esac
+    shift
+done
+
+sinf "exporting data to ${NC}$OUT_FILE"
+# Init file
+{
+  echo "# HELP net_iface_info Network interface status and connection"
+  echo "# TYPE net_iface_info gauge"
+} > "$OUT_FILE"
+
+# Find default route interface (gateway)
+default_iface=$(ip route | awk '/^default/ {print $5; exit}')
+
+# --- Collect interface status (from nmcli device status) ---
+nmcli -t -f DEVICE,TYPE,CONNECTION,STATE device status | while IFS=: read -r dev type conn state; do
+  [ -z "$dev" ] && continue
+  [ -z "$conn" ] && conn="(none)"
+  [ -z "$state" ] && state="unknown"
+
+  # Mark gateway
+  gateway="no"
+  [ "$dev" == "$default_iface" ] && gateway="yes"
+
+  # Sanitize
+  safe_conn=$(echo "$conn" | tr ' ' '_' | tr -d '"' | tr -d "'")
+
+  # Set value: 1 = connected, 0 = otherwise
+  val=0
+  [ "$state" == "connected" ] && val=1
+
+  echo "net_iface_info{interface=\"$dev\", type=\"$type\", connection=\"$safe_conn\", state=\"$state\", gateway=\"$gateway\"} $val" >> "$OUT_FILE"
+done
+
+
+{
+  echo "# HELP net_wifi_info WiFi scan info"
+  echo "# TYPE net_wifi_info gauge"
+} >> "$OUT_FILE"
+
+nmcli -t -f ACTIVE,SSID,MODE,CHAN,RATE,SIGNAL,SECURITY dev wifi | while IFS=: read -r active ssid mode chan rate signal security; do
+[ -z "$active" ] && active="no"
+[ -z "$ssid" ] && ssid="(hidden)"
+[ -z "$signal" ] && signal=0
+[ -z "$security" ] && security="unknown"
+safe_ssid=$(echo "$ssid" | tr ' ' '_' | tr -d '"' | tr -d "'" | tr -d ':')
+echo "net_wifi_info{active=\"$active\", ssid=\"$safe_ssid\", chan=\"$chan\", rate=\"$rate\", security=\"$security\"} $signal" >> "$OUT_FILE"
+done
+
+
+# nmcli -t -f DEVICE,TYPE,CONNECTION,STATE device status 

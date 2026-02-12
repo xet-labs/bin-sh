@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "$scriptPath")"
+scriptName=${0##*/}
+# import helper/logging lib, exit if unavailable
+source "${scriptDir}/libxlvini" || {
+    echo "'libxlvini' not found in $scriptDir; please ensure it exists for proper msg display"
+}
 
 if [ -d /x-obs/ ]; then cd /x-obs/
 elif [ -d ~/x-obs/ ]; then cd ~/x-obs/
 elif [ -d /x/obs/ ]; then cd /x/obs/
 elif [ -d ~/x/obs/ ]; then cd ~/x/obs/
 else
-    echo "Dir 'obs' not found!"
+    serr "Dir 'obs' not found!"
     exit 1
 fi
 
-gitx sync branch main
+$scriptDir/gitx add-safe-dir sync branch main

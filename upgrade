@@ -146,12 +146,12 @@ while getopts "xuUonfcClkh" opt;do case $opt in
 	        exit 0
 	        ;;
 	    :)
-	        alert "Error: Option $1 requires an argument."
+	        alrt "Error: Option $1 requires an argument."
 	        usage
 	        exit 1
 	        ;;
 	    *)
-	        alert "Error: Invalid option $1"
+	        alrt "Error: Invalid option $1"
 	        usage
 	        exit 1
 	        ;;
@@ -173,5 +173,5 @@ export DEBIAN_FRONTEND=noninteractive
 [ "${fixpkgSig:-0}" -eq 1 ] && fixpkg;
 [ "${cleanSig:-0}" -eq 1 ] && clean $cleanSig;
 [ "${fixBootLinkSig:-0}" -eq 1 ] && fixBootLink;
-[ "${?}" -eq 0 ] && (smsg "$(date): upgrade successful") | (salert "$(date): upgrade failed")
+[ "${?}" -eq 0 ] && (smsg "$(date): upgrade successful") | (salrt "$(date): upgrade failed")
 

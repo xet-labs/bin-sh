@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-rsync --exclude={"/dev/*","/home/*/.cache/*","/lost+found","/media/*","/mnt/*","/proc/*","/*/.cache/*","/run/*","/sys/*","/tmp/*","/var/cache/apt/archives/*","/var/lib/apt/lists/*","/var/log/*","/home/*/.local/share/Trash/*","/root/.local/share/Trash/*"} "${@}"
+rsync --exclude={"/dev/*","/home/*/.cache/*","/lost+found","/media/*","/mnt/*","/proc/*","/*/.cache/*","/run/*","/sys/*","/tmp/*","/var/cache/apt/archives/*","/var/lib/apt/lists/*","/var/log/*",".Trash-*","/home/*/.local/share/Trash/*","/root/.local/share/Trash/*"} "${@}"

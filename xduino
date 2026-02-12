@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
-if command -v "arduino-cli" &> /dev/null; then
-	arduino-cli ${@}
-else
-	arduino-cli-amd ${@}
-fi
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")";
+scriptName=${0##*/}
+
+exec "$scriptDir/xbin" xarduino-cli "${@}"
+
+
