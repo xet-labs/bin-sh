@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+
+# Paths Configuration
+CONF="/etc/btrbk/btrbk.conf"
+SNAP_SRC="/mnt/xlv_1/.btrbk.snap" # Change.this to the directory containing your backups
+
+usage() {
+    cat <<-EOF
+    Usage: $(basename $0) [options]
+
+    Options:
+    -c, --conf <file>         define path to btrbk.conf (default: /etc/btrbk/btrbk.conf)
+    -s, --snap-src <dir>      define directory holding backups (default: /mnt/xlv_1/.btrbk.snap)
+    -d, --snap-dest <dir>     define destination where snapshots will be restored (default: ./)
+    -h, --help                display this help message
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    -c|--conf|conf)
+        CONF="${2}"
+        ;;
+    -s|--snap-src|snap-src)
+        SNAP_SRC="${2}"
+        ;;
+    -d|--snap-dest|snap-dest)
+        SNAP_DEST="${2}"
+        ;;
+    -h|help)
+        usage
+        exit 0
+        ;;
+    esac
+    shift
+done
+
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")"
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+if [[ ! -f "$CONF" ]]; then
+    serr "config file `$CONF` not found."
+    exit 1
+fi
+
+declare -A bkp_map
+current_subvol=""
+
+sinf "parsing `$CONF`"
+
+# 1. Parse btrbk.conf and build the map dynamically
+while read -r line || [[ -n "$line" ]]; do
+    # Trim leading whitespace
+    line="${line#"${line%%[![:space:]]*}"}"
+    
+    # Skip comments and empty lines
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    
+    # Split the line by spaces/tabs
+    read -a tokens <<< "$line"
+    key="${tokens[0]}"
+    val="${tokens[1]}"
+    
+    if [[ "$key" == "subvolume" ]]; then
+        current_subvol="$val"
+        # Set default mapping to itself in case no explicit 'snapshot_name' is provided
+        bkp_map["$current_subvol"]="$current_subvol"
+    elif [[ "$key" == "snapshot_name" && -n "$current_subvol" ]]; then
+        # Update mapping if a specific snapshot_name block is found
+        bkp_map["$current_subvol"]="$val"
+    fi
+done < "$CONF"
+
+
+# 2. Iterate through the generated map and perform restores
+echo "[*] Starting restore process in $(pwd)..."
+
+for subvol in "${!bkp_map[@]}"; do
+    snap_name="${bkp_map[$subvol]}"
+    
+    # Find the latest snapshot based on btrbk's timestamp format (sort correctly puts newest at bottom)
+    latest_snap=$(find "$SNAP_SRC" -maxdepth 1 -type d -name "${snap_name}.*" | sort | tail -n 1)
+    
+    if [[ -z "$latest_snap" ]]; then
+        echo "[-] No backup found for $subvol (expected prefix: $snap_name)"
+        continue
+    fi
+    
+    echo "[+] Found latest backup for $subvol: $(basename "$latest_snap")"
+    
+    # Safely create parent directories if destination includes slashes (e.g., @bkp/@os.root/debian)
+    dest_dir="$(dirname "./$subvol")"
+    if [[ "$dest_dir" != "." ]]; then
+        mkdir -p "$dest_dir"
+    fi
+    
+    # Prevent overwriting if destination subvolume already exists
+    if [[ -e "./$subvol" ]]; then
+        echo "    -> Destination ./$subvol already exists, skipping."
+        continue
+    fi
+
+    # Execute the restoration 
+    echo "    -> Restoring to ./$subvol"
+    
+    # Uncomment the following line to actually execute the btrfs command safely!
+    # sudo btrfs subvolume snapshot "$latest_snap" "./$subvol"
+    
+done
+
+echo "[*] Done."

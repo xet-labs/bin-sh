@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+sudo systemctl mask systemd-networkd-wait-online.service
+#sudo systemctl enable network-online.target

@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+
+# feature vars
+LogSig=${LogSig:-0}
+DebugSig=${DebugSig:-0}
+MsgPrintSig=${MsgPrintSig:-1}
+
+# utility vars
+: "${TMPDIR:=/tmp}"
+
+ThisUser="${SUDO_USER:-${LOGNAME:-$(whoami)}}"
+ThisHome="${SUDO_HOME:-${HOME:-/root}}"
+ThisPath="${PWD:-$(pwd)}"
+ThisPathReal="$(readlink -f "${ThisPath}")"
+
+# functional vars
+ScriptPath="${ScriptPath:-$(readlink -f "${BASH_SOURCE[0]:-$0}")}"
+ScriptDir="$(dirname "${ScriptPath}")"
+ScriptName=${ScriptPath##*/}
+ScriptBaseName="${ScriptName%.*}"
+
+baseLogDirs=(
+    "/var/log"
+    "/tmp"
+    "$HOME"
+    "$PWD"
+    "$TMPDIR"
+)
+
+# pick first writable dir for logs
+for dir in "${baseLogDirs[@]}"; do
+    if [[ -w "${dir}" ]]; then
+        if [[ "$dir" == "$HOME" ]]; then
+            def_logDir="${dir}/.${ScriptBaseName}"
+        else
+            def_logDir="${dir}/${ScriptBaseName}"
+        fi
+        break
+    fi
+done
+
+def_logFileName="${ScriptName}.log"
+
+logDir="${logDir:-${def_logDir}}"
+logFileName="${logFileName:-${def_logFileName}}"
+logFile="${logFile:-${logDir}/${logFileName}}"
+
+# colors, but am color blinded ;)
+NC='\033[0m'
+BOLD='\033[1m'
+B="${BOLD}"
+DARK='\033[2m'
+BLACK=${NC}'\033[0;90m'
+BLUE=${NC}'\033[0;34m'
+CYAN=${NC}'\033[0;36m'
+GREEN=${NC}'\033[0;32m'
+GREY=${NC}'\033[0;40m'
+MAGENTA=${NC}'\033[0;35m'
+RED=${NC}'\033[0;31m'
+YELLOW=${NC}'\033[0;33m'
+
+BASE16_THEME=${BASE16_THEME:-}
+[[ -n "$BASE16_THEME" ]] && BLACK="${NC}"
+
+msgCalled=0
+cc=()
+
+# add -u for UTC standard tipestamp
+timestamp() { date +"%Y%m%d.%H%M%S"; }
+
+log_pre_setup() {
+    # asynchronous log writer, wooow !! may cause out-of-order sync to file!!
+    # no-worries each log includes timestamp, so prioritizing perfomance
+    exec 3>>"$logFile"
+    echo -e "\n$(timestamp) >> ${ScriptPath}" >&3
+    trap 'script_post' EXIT INT TERM
+}
+# placeholder for actual fn as the `post_script` fn will use {utility} fn, and {utility} fn uses `out` fn
+# actual fn is defined after utility fn, avoids any err in shell
+script_post() {
+    :
+}
+# didnt cause problem so far calling utility {inf,msg,etc} functions earlier !!
+script_post() {
+    # output this msg only if stdout is a terminal dev
+    [[ -t 1 ]] && [ "${scriptPostDone:-0}" -eq 0 ] && {
+        scriptPostDone=1
+        LogSig=nolog
+        inf "logs: ${logFile}"
+    }
+
+    #sync -f "$logFile" 2>/dev/null &
+
+    # 3. Explicitly close the file descriptor
+    # This acts as a 'final flush' for the Bash process
+    exec 3>&- 2>/dev/null
+}
+
+# core gateway fn out()
+out() {
+    (( ${MsgPrintSig:-1} )) || return
+    # clear local vars, make sure vars storing msg are cleared at the start of every call
+    # if it isn't cleared, and the trap logic causes a fall-through in the case statement,
+    # then printf will just re-output whatever was stored in that variable from the previous call
+    # kernel likes playing prnks !!
+    local logMsg="" logMsgStr="" msg="" msgStr=""
+    local pn="" scopeMsg=""
+    local c cx mode msg0 msg99 x
+    local beginNewLineSig=0 scopeSig=0
+
+    if [[ "${LogSig:-0}" != "0" && "${LogSig:-0}" != "nolog" ]]; then
+        logTime="${LogTimestampColor:-${BLACK}}$(timestamp) "
+        [[ -d ${logDir} ]] || mkdir -p "${logDir}"
+        [[ -e ${logFile} ]] || touch "${logFile}"
+        [ "${scriptPreDone:-0}" -eq 0 ] && {
+            scriptPreDone=1
+            log_pre_setup
+        }
+    fi
+
+    # handle optional flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        _bn)
+            beginNewLineSig=1
+            [[ "${msgCalled:-0}" -gt 0 ]] && pn="\n"
+            ;;
+        _en) endNewLineSig=1 ;;
+        _scope) scopeSig=1 ;;
+        _scopeMsg)
+            scopeMsg="$2"
+            shift
+            ;;
+        *) break ;;
+        esac
+        shift
+    done
+
+    # Protect unset arguments
+    c="${1:-${NC}}"
+    msg="${2:-}"
+    mode="${3:-}"
+    cx="${4:-0}"
+    local msg0=""
+    local Scope="${Scope:-${scope:-${scriptName}}}"
+    ((${scopeSig:-0})) && scopeMsg="${scopeMsg:-${BLACK}[${BLUE}${BOLD}${Scope}${BLACK}]-\c }"
+    #append log timestamp based on log sig, if 1 simply show timestamp in logfile itf 2 show in output as well
+    # LogSig=nolog is mean whent LogSig={1,2} and u want to print smthing in terminal but not in the log file
+    # set the just befor the message fn call, like:
+    # LogSig=nolog; inf "this msg will be printed in terminal but not in logfile"
+    case "$LogSig" in
+    1)
+        logMsg="${pn}${logTime:-}${scopeMsg}${c}${msg}"
+        msg="${pn}${scopeMsg}${c}${msg}"
+        ;;
+    2)
+        lps=" "
+        logMsg="${pn}${logTime:-}${scopeMsg}${c}${msg}"
+        ;;
+    nolog | *)
+        msg="${pn}${scopeMsg}${c}${msg}"
+        ;;
+    esac
+
+    # backward compatibility support for  `--\c` resume currrent color
+    # this was initial version still being used in sm scripts
+    msg="$(sed "s/--\\\\c/${c//\\/\\\\}/g" <<<"$msg")"
+    logMsg="$(sed "s/--\\\\c/${c//\\/\\\\}/g" <<<"$logMsg")"
+    # support for  `-\c` resume currrent color
+    msg="$(sed "s/-\\\\c/${c//\\/\\\\}/g" <<<"$msg")"
+    logMsg="$(sed "s/-\\\\c/${c//\\/\\\\}/g" <<<"$logMsg")"
+
+    cc=("$c" "${cc[@]}")
+    x="${cc[$cx]:-${NC}}"
+
+    case "$mode" in
+    !n)
+        msgStr="${msg0}${msg}${NC}"
+        logMsgStr="${msg0}${logMsg}${NC}"
+        ;;
+    p)
+        msgStr="${msg0}${msg}${x}"
+        logMsgStr="${msg0}${logMsg}${x}"
+        ;;
+    pn)
+        msgStr="\n${msg0}${msg}${NC}\n"
+        logMsgStr="\n${msg0}${logMsg}${NC}\n"
+        ;;
+    *)
+        msgStr="${msg0}${msg}${NC}\n"
+        logMsgStr="${msg0}${logMsg}${NC}\n"
+        ;;
+
+    esac
+
+    # printf "%b" "${msgStr}" | {
+    #   if [[ ${LogSig:-0} -eq 1 ]]; then
+    #     tee -a "${logFile}"
+    #   else
+    #     cat
+    #   fi
+    # }
+
+    # all this hassle just to show timestamp data ;)
+    case "$LogSig" in
+    1)
+        printf "%b" "${msgStr}"
+        printf "%b" "${logMsgStr}" >&3 &
+        ;;
+    2) # show timestamp in terminal aswell
+        printf "%b" "${logMsgStr}" | tee -a /dev/fd/3 ;;
+    *) printf "%b" "${msgStr}" ;;
+    esac
+
+    # keeping the nolog assignment here as trap triggers unexpected behaviour in logging engine !!
+    # on exit trap causes the case {print} (the just above) part to rerun and the last buffered message is printed
+    # based on case match it prints to terminal and log file but data isnt shown in terminal cuz
+    # it is already partially detached but the log file isnt. daamn kernel pranks again !!
+    [[ "$LogSig" == "nolog" ]] && LogSig=${LogSig_old:-0}
+    LogSig_old=${LogSig:-0}
+}
+
+# adds gap at line begining for non scoped func if $LogSig=1, else the gap is normally collapsed
+lps=""
+
+# convenience wrappers
+pout() { out "${2:-${NC}}" "${1:-}" "p" "${3:-0}"; }
+
+debug() { ((${DebugSig:-0})) && out "${GREY}${BOLD}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+sdebug() { ((${DebugSig:-0})) && out "_scopeMsg" "${BLACK}[${GREY}DBG${BLACK}]${NC} " "${GREY}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+msg() { out "${BLUE}${BOLD}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+smsg() {
+    out "_scope" "${BLUE}${BOLD}" "${1:-}" "${2:-}" "${3:-0}"
+    ((msgCalled++))
+}
+
+inf() { out "${BLACK}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+sinf() { out "_scope" "${BLACK}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+dbg() { out "${BLUE}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+sdbg() { out "_scope" "${BLUE}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+alrt() { out "${MAGENTA}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+salrt() { out "_scope" "${MAGENTA}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+wrn() { out "${YELLOW}" "${lps}${1:-}" "${2:-}" "${3:-0}"; }
+swrn() { out "_scope" "${YELLOW}" "${1:-}" "${2:-}" "${3:-0}"; }
+
+err() {
+    out "${RED}" "${lps}${1:-}" "${2:-}" "${3:-0}"
+    return 1
+}
+serr() {
+    out "_scope" "${RED}${BOLD}" "${1:-}" "${2:-}" "${3:-0}"
+    return 1
+}
+
+fatal() {
+    out "${RED}" "${lps}${1:-}" "${2:-}" "${3:-0}"
+    exit 1
+}
+sfatal() {
+    out "_scope" "${RED}" "${1:-}" "${2:-}" "${3:-0}"
+    exit 1
+}
+
+# check if required package exists
+RequireCmd=()
+require_cmd() {
+    local missing=()
+    for cmd in "${RequireCmd[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if ((${#missing[@]} > 0)); then
+        if [ -t 1 ]; then
+            wrn "Missing command(s): ${NC}${missing[*]}" >&2
+        else
+            printf '%s\n' "${missing[*]}"
+        fi
+        return 1
+    fi
+}
+
+RequirePkg=()
+require_pkg() {
+    local missing=()
+    local req name pkg
+
+    for req in "${RequirePkg[@]}"; do
+        if [[ $req == *:* ]]; then
+            IFS=: read -r name pkg <<<"$req"
+        else
+            name=$req
+            pkg=$req
+        fi
+
+        if ! dpkg -s "$pkg" &>/dev/null; then
+            missing+=("$pkg")
+        fi
+    done
+
+    if ((${#missing[@]} > 0)); then
+        if [ -t 1 ]; then
+            wrn "Missing package(s): ${NC}${missing[*]}" >&2
+        else
+            printf '%s\n' "${missing[*]}"
+        fi
+        return 1
+    fi
+}

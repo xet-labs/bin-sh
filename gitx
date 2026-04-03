@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+
+this_path="${PWD:-$(pwd)}"
+this_path_real="$(readlink -f ${this_path})"
+scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+scriptDir="$(dirname "${scriptPath}")"
+scriptName=${0##*/}
+source "${scriptDir}/libxlvini"
+
+_git_push() {
+    sinf "${_branch} ⬆️  Pushing local changes.."
+    if ! git push origin "$gitBranch"; then
+        swrn "${_branch} ❌ Failed to push changes"
+        return 1
+    fi
+}
+
+_git_checkout_tag() {
+    scope=Git-checkout
+    checkout_tag="${1:-$gitTag}"
+    checkout_tag="${checkout_tag:-$(git tag | fzf)}"
+    sinf "${_branch} Checking out to tag ${checkout_tag}"
+    git checkout "${checkout_tag}"
+}
+
+_git_sync() {
+    scope=git-sync
+
+    gitMsg="sync-${gitMsg}"
+    committed=0
+
+    echo ""
+
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        sinf "${_branch} 💾 Committing changes '${this_path_real}' - '$gitMsg'"
+        git add -A && git commit -m "$gitMsg" && committed=1
+    else
+        sinf "${_branch} ✅ Working tree is clean '${this_path_real}'"
+    fi
+
+    sinf "${_branch} ⬇️  Fetching remote changes.."
+    # gitRefRemote="$(git ls-remote origin "$gitBranch" | cut -f1)"
+    if git pull origin "$gitBranch" --rebase; then
+        gitRefNew=$(git rev-parse HEAD)
+
+        if [ "$gitRef" != "$gitRefNew" ] || [ "$committed" -eq 1 ]; then
+            _git_push
+        else
+            sinf "${_branch} 🔄 Working tree already synced"
+        fi
+    else
+        swrn "${_branch} ❌ Failed to fetch changes"
+        return 1
+    fi
+}
+
+_git_scan_repo() {
+    local base="${1:-.}"
+    local max_depth="${2:-5}"
+    local count=1
+    local base_slash_count=$(grep -o "/" <<<"$base" | wc -l)
+
+    if [[ -d "./.git" ]]; then
+        printf " 🌐 $(inf "Remote url:") %s\n" "$(msg "${gitUrl:-$(alrt "No remote url found!!")}")"
+        printf " 📁 $(inf "Local path:") %s\n" "$([ -n "$gitDir" ] && echo -n "$(realpath "$gitDir")" || alrt "No local path found!!")"
+        return
+    fi
+
+    echo ""
+    scan_dir() {
+        local dir="$1"
+        # local dir="$(realpath "$1")"
+
+        # Calculate current depth
+        local cur_slash_count=$(grep -o "/" <<<"$dir" | wc -l)
+        local depth=$((cur_slash_count - base_slash_count))
+        [[ $depth -gt $max_depth ]] && return
+
+        if [[ -d "$dir/.git" ]]; then
+            local url
+            url=$(git -C "$dir" remote get-url origin 2>/dev/null)
+
+            # Format index like '  1)'
+            local index
+            index=$(printf "%3d)" "$count")
+
+            # Length of prefix (e.g. '  1) ') used to align the 🌐 line
+            local padlen=${#index}
+            local pad
+            pad=$(printf "%*s" "$padlen" "")
+
+            # Print aligned output
+            printf "%s 🌐 $(inf "Remote-url:") %s\n" "$index" "$(msg "${url:-$(alrt "No remote url found!!")}")"
+            printf "%s 📁 $(inf "Local-path:") %s\n" "$pad" "$([ -n "$dir" ] && echo -n "$(realpath "$dir")" || alrt "No local path found!!")"
+            echo ""
+
+            count=$((count + 1))
+            return # Do NOT recurse into subfolders of a git repo
+        fi
+
+        for sub in "$dir"/*/; do
+            [[ -d "$sub" ]] && scan_dir "${sub%/}"
+        done
+    }
+
+    scan_dir "$base"
+}
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") -m <commit-message>
+Options:
+    -m              Commit message (optional)
+    -b              Branch (optional)
+    -s|sync         Sync changes
+    -h              Display this help message
+    add-safe-dir    Safe dir
+EOF
+}
+
+#- Parse args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    add-safe-dir)
+        gitAddSafeDirSig=1
+        ;;
+    d | -d | dir | --dir)
+        gitDir="$2"
+        shift
+        ;;
+    depth | --depth)
+        gitDepth="$2"
+        shift
+        ;;
+    b | -b | branch)
+        gitBranch=$2
+        shift
+        ;;
+    m | -m | msg)
+        gitMsg=$2
+        shift
+        ;;
+    t | -t | tag)
+        gitTag=$2
+        shift
+        ;;
+    cot | --cot | checkout-tag)
+        gitCheckoutTagSig=1
+        ;;
+    s | -s | --sync | sync)
+        gitSyncSig=1
+        ;;
+    ls | lr | listrepo | --listrepo)
+        gitListRepoSig=1
+        ;;
+    h | --help)
+        usage
+        exit 0
+        ;;
+    *)
+        alert "Invalid option $1"
+        usage
+        exit 1
+        ;;
+    esac
+    shift
+done
+
+#- Set default commit message and branch if not provided
+export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
+gitDir="${gitDir:-$PWD}"
+gitUrl="${gitUrl:-$(git -C "$dir" remote get-url origin 2>/dev/null)}"
+gitBranch="${gitBranch:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null)}"
+gitRef="$(git rev-parse ${gitBranch} 2>/dev/null)"
+
+_branch="${BLUE}(${DARK}${gitBranch}${BLUE})--\c"
+gitMsgMeta="$(hostname)-$(date '+%Y-%m-%d-%a')"
+gitMsg="${gitMsg:+$gitMsgMeta $gitMsg}"
+gitMsg="${gitMsg:-$gitMsgMeta:$(date '+%H%M%S')}"
+
+[ ${gitAddSafeDirSig:-0} -eq 1 ] && git config --global --add safe.directory "${gitDir}"
+[ ${gitListRepoSig:-0} -eq 1 ] && _git_scan_repo "${gitDir:-$PWD}" "${gitDepth:-4}" || :
+[ ${gitCheckoutTagSig:-0} -eq 1 ] && _git_checkout_tag || :
+[ ${gitSyncSig:-0} -eq 1 ] && _git_sync || :

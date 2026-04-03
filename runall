@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+scripts_dir="$1"
+
+for script in "$scripts_dir"/*; do
+    if [ -x "$script" ]; then
+        "$script"
+    fi
+done

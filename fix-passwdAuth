@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+# fix "passwd: Authentication token manipulation error"
+# err occurs while changing password for user "sudo passwd $USER"
+sudo mount -o remount,rw /
+sudo chmod 640 /etc/shadow
+sudo pam-auth-update

@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+
+# Helper functions for output
+out() { printf "%b\n" "$1$2\e[0m"; }
+msg() { out "\n\e[1;34m#-- " "$@"; }
+inf() { out "\e[0;2m-- " "$@"; }
+err() { out "\e[0;31m!!! " "$@"; exit 1; }
+
+# Ensure jq is installed
+if ! command -v jq >/dev/null 2>&1; then
+    msg "Installing 'jq' required for parsing package configurations..."
+    sudo apt update && sudo apt install -y jq
+fi
+
+read -r -d '' PKG_JSON << 'EOF'
+{
+  "docker": {
+    "url": {
+      "gpg_key": "https://download.docker.com/linux/debian/gpg",
+      "repo_base": "https://download.docker.com/linux/debian"
+    },
+    "gpg_dest": "/etc/apt/trusted.gpg.d/docker.gpg",
+    "repo_line": "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg.d/docker.gpg] https://download.docker.com/linux/debian bullseye stable",
+    "repo_dest": "/etc/apt/sources.list.d/docker-ce.list",
+    "apt_packages": ["docker-ce", "docker-ce-cli", "containerd.io"],
+    "pre_install": "sudo apt update -y; sudo apt install apt-transport-https ca-certificates software-properties-common curl gnupg lsb-release -y",
+    "post_install": "sudo usermod -aG docker $(logname); sudo systemctl enable docker --now",
+    "uninstall": "sudo apt --purge remove -y docker-ce docker-ce-cli containerd.io; sudo rm -rf /var/lib/docker /var/lib/containerd; sudo rm -f /etc/apt/sources.list.d/docker-ce.list /etc/apt/trusted.gpg.d/docker.gpg; sudo apt autoremove -y; sudo apt autoclean -y"
+  },
+  "brave": {
+    "url": {
+      "install_script": "https://dl.brave.com/install.sh"
+    },
+    "pre_install": "sudo apt install -y curl",
+    "script_runner": "sh"
+  },
+  "filebrowser": {
+    "url": {
+      "install_script": "https://raw.githubusercontent.com/filebrowser/get/master/get.sh"
+    },
+    "script_runner": "bash"
+  },
+  "nodejs": {
+    "url": {
+      "install_script": "https://deb.nodesource.com/setup_current.x"
+    },
+    "script_runner": "bash -",
+    "apt_packages": ["nodejs"],
+    "uninstall": "sudo apt-get purge nodejs -y && sudo rm -f /etc/apt/sources.list.d/nodesource.list"
+  },
+  "sublime": {
+    "url": {
+      "gpg_key": "https://download.sublimetext.com/sublimehq-pub.gpg",
+      "repo_base": "https://download.sublimetext.com/"
+    },
+    "gpg_dest": "/etc/apt/trusted.gpg.d/sublimehq-archive.gpg",
+    "repo_line": "deb https://download.sublimetext.com/ apt/stable/",
+    "repo_dest": "/etc/apt/sources.list.d/sublime-text.list",
+    "apt_packages": ["apt-transport-https", "sublime-text"]
+  },
+  "spotify": {
+    "url": {
+      "gpg_key": "https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.asc"
+    },
+    "gpg_dest": "/etc/apt/trusted.gpg.d/spotify.gpg",
+    "repo_line": "deb https://repository.spotify.com stable non-free",
+    "repo_dest": "/etc/apt/sources.list.d/spotify.list",
+    "apt_packages": ["spotify-client"]
+  },
+  "vscode": {
+    "url": {
+      "gpg_key": "https://packages.microsoft.com/keys/microsoft.asc"
+    },
+    "gpg_dest": "/usr/share/keyrings/microsoft.gpg",
+    "pre_install": "sudo apt-get install wget gpg -y && wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/microsoft.gpg && sudo install -D -o root -g root -m 644 /tmp/microsoft.gpg /usr/share/keyrings/microsoft.gpg && rm -f /tmp/microsoft.gpg",
+    "repo_line": "Types: deb\nURIs: https://packages.microsoft.com/repos/code\nSuites: stable\nComponents: main\nArchitectures: amd64,arm64,armhf\nSigned-By: /usr/share/keyrings/microsoft.gpg",
+    "repo_dest": "/etc/apt/sources.list.d/vscode.sources",
+    "apt_packages": ["code"]
+  },
+  "arduino-cli": {
+    "url": {
+      "install_script": "https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh"
+    },
+    "script_runner": "BINDIR=/usr/local/bin sh",
+    "post_install": "arduino-cli version"
+  },
+  "cloudflared": {
+    "url": {
+      "gpg_key": "https://pkg.cloudflare.com/cloudflare-main.gpg"
+    },
+    "gpg_dest": "/usr/share/keyrings/cloudflare-main.gpg",
+    "repo_line": "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main",
+    "repo_dest": "/etc/apt/sources.list.d/cloudflared.list",
+    "apt_packages": ["cloudflared"]
+  },
+  "droidcam": {
+    "url": {
+      "zip": "https://files.dev47apps.net/linux/droidcam_2.0.0.zip"
+    },
+    "pre_install": "sudo apt install -y adb pavucontrol libappindicator3-1 linux-headers-$(uname -r) gcc make",
+    "post_install": "wget -N -O /tmp/droidcam_latest.zip https://files.dev47apps.net/linux/droidcam_2.0.0.zip && unzip -o /tmp/droidcam_latest.zip -d /tmp/droidcam && cd /tmp/droidcam && sudo ./install-client && sudo ./install-video && sudo ./install-sound && pacmd load-module module-alsa-source source_properties=device.description=DroidCam device=hw:Loopback,1,0",
+    "uninstall": "sudo /opt/droidcam-uninstall"
+  },
+  "myst": {
+    "url": {
+      "install_script": "https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh",
+      "gpg_key": "https://mysteriumnetwork.github.io/node/gpg.key"
+    },
+    "pre_install": "sudo apt install -y apt-transport-https ca-certificates curl software-properties-common; sudo sysctl -w net.ipv4.ip_forward=1 || true; sudo iptables -P FORWARD ACCEPT; cat <<'CON' | sudo tee /etc/sysctl.d/ip-fwd.conf >/dev/null\nnet.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\nCON\nsudo sysctl -p /etc/sysctl.d/ip-fwd.conf",
+    "script_runner": "bash",
+    "post_install": "sudo systemctl restart mysterium-node.service",
+    "uninstall": "sudo systemctl stop mysterium-node; sudo apt remove --purge -y myst; sudo apt autoremove --purge -y; sudo rm -rf /var/lib/mysterium-node /etc/mysterium-node"
+  },
+  "nextcloud": {
+    "apt_packages": ["apache2", "php", "libapache2-mod-php", "mariadb-server", "php-curl", "php-gd", "php-mbstring", "php-xml", "php-zip", "php-dom", "php-ctype", "php-fileinfo", "php-json", "php-posix", "php-simplexml", "php-xmlreader", "php-xmlwriter", "php-pdo-mysql", "php-apcu", "php-memcached", "php-redis", "php-bz2", "php-intl", "php-exif", "imagemagick", "ffmpeg", "php-ldap", "php-smbclient", "php-ftp", "php-imap", "php-bcmath", "php-gmp"],
+    "post_install": "sudo systemctl start mariadb.service; sudo mysql -u root -e \"CREATE DATABASE IF NOT EXISTS nextcloud CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci; CREATE USER IF NOT EXISTS 'nextclouduser'@'localhost' IDENTIFIED BY 'nt1@xLvini#localsrv.db.12109'; GRANT ALL PRIVILEGES ON nextcloud.* TO 'nextclouduser'@'localhost'; FLUSH PRIVILEGES;\"; wget https://download.nextcloud.com/server/releases/latest.tar.bz2 -O /tmp/latest.tar.bz2 && sudo tar -xvf /tmp/latest.tar.bz2 -C /var/www/ && rm -f /tmp/latest.tar.bz2; sudo chown -R www-data:www-data /var/www/nextcloud/; sudo chmod -R 755 /var/www/nextcloud/; cat <<'CON' | sudo tee /etc/apache2/sites-available/nextcloud.conf >/dev/null\nListen 8080\n<VirtualHost *:8080>\nServerName ntl.xlvini.com\nDocumentRoot /var/www/nextcloud\n<Directory /var/www/nextcloud>\nOptions +FollowSymlinks\nAllowOverride All\nRequire all granted\n<IfModule mod_dav.c>\nDav off\n</IfModule>\nSetEnv HOME /var/www/nextcloud\nSetEnv HTTP_HOME /var/www/nextcloud\n</Directory>\nErrorLog \\${APACHE_LOG_DIR}/nextcloud-error.log\nCustomLog \\${APACHE_LOG_DIR}/nextcloud-access.log combined\n</VirtualHost>\nCON\nsudo a2ensite nextcloud.conf; sudo a2enmod rewrite; sudo systemctl restart apache2; echo '*/5  *  *  *  * www-data php -f /var/www/nextcloud/cron.php' | sudo tee /etc/cron.d/nextcloud >/dev/null"
+  },
+  "ocamlfuse": {
+    "pre_install": "sudo apt install -y software-properties-common dirmngr",
+    "repo_line": "deb http://ppa.launchpad.net/alessandro-strada/ppa/ubuntu xenial main\ndeb-src http://ppa.launchpad.net/alessandro-strada/ppa/ubuntu xenial main",
+    "repo_dest": "/etc/apt/sources.list.d/alessandro-strada-ubuntu-ppa-bionic.list",
+    "post_install": "sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys AD5F235DF639B041",
+    "apt_packages": ["google-drive-ocamlfuse"]
+  },
+  "oh-my-zsh": {
+    "apt_packages": ["git", "zsh"],
+    "url": {
+      "install_script": "https://raw.githubusercontent.com/robbyrussell/oh-my-zsh/master/tools/install.sh"
+    },
+    "script_runner": "sh",
+    "post_install": "git clone https://github.com/zsh-users/zsh-autosuggestions ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions || true; git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting || true"
+  },
+  "r": {
+    "url": {
+      "gpg_key": "https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc",
+      "deb": "https://download1.rstudio.org/electron/bionic/amd64/rstudio-2023.03.0-386-amd64.deb"
+    },
+    "gpg_dest": "/etc/apt/trusted.gpg.d/cran_ubuntu_key.asc",
+    "repo_line": "deb https://cran.rstudio.com/bin/linux/debian buster-cran40/\ndeb http://cloud.r-project.org/bin/linux/debian bullseye-cran40/",
+    "repo_dest": "/etc/apt/sources.list.d/rstudio.list",
+    "apt_packages": ["r-base"],
+    "post_install": "wget https://download1.rstudio.org/electron/bionic/amd64/rstudio-2023.03.0-386-amd64.deb -O /tmp/rstudio.deb; sudo apt install -f -y /tmp/rstudio.deb; rm /tmp/rstudio.deb"
+  },
+  "rdp": {
+    "apt_packages": ["xfce4", "xfce4-session", "xrdp"],
+    "pre_install": "export DEBIAN_FRONTEND=noninteractive",
+    "post_install": "sudo systemctl enable xrdp; sudo adduser xrdp ssl-cert; echo xfce4-session >~/.xsession; sudo service xrdp restart; echo 'Please set azureuser password using: sudo passwd azureuser'"
+  },
+  "vbox": {
+    "url": {
+      "gpg_key": "https://www.virtualbox.org/download/oracle_vbox_2016.asc"
+    },
+    "gpg_dest": "/usr/share/keyrings/oracle-virtualbox-2016.gpg",
+    "repo_line": "deb [arch=amd64 signed-by=/usr/share/keyrings/oracle-virtualbox-2016.gpg] https://download.virtualbox.org/virtualbox/debian bullseye contrib",
+    "repo_dest": "/etc/apt/sources.list.d/virtualbox.list",
+    "apt_packages": ["virtualbox"]
+  },
+  "wordpress": {
+    "apt_packages": ["apache2", "ghostscript", "libapache2-mod-php", "php", "php-bcmath", "php-curl", "php-imagick", "php-intl", "php-json", "php-mbstring", "php-xml", "php-zip"],
+    "post_install": "sudo mkdir -p /srv/www; sudo chown www-data: /srv/www; curl https://wordpress.org/latest.tar.gz | sudo -u www-data tar zx -C /srv/www; echo 'Run inst-wordpress directly for full apache & mysql configs as it requires user inputs for domains/passwords'"
+  }
+}
+EOF
+
+list_pkgs() {
+    msg "Available packages:"
+    echo "$PKG_JSON" | jq -r 'keys[]' | sed 's/^/  - /'
+}
+
+install_pkg() {
+    local pkg=$1
+    if ! echo "$PKG_JSON" | jq -e ".\"$pkg\"" >/dev/null; then
+        err "Package '$pkg' configuration not found!"
+    fi
+
+    msg "Starting installation sequence for '$pkg'..."
+
+    # Pre-install routines
+    local pre=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".pre_install // empty")
+    if [[ -n "$pre" ]]; then
+        inf "Running pre-installation commands..."
+        eval "$pre"
+    fi
+
+    # Handle gpg keys via url
+    local gpg_key=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".url.gpg_key // empty")
+    local gpg_dest=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".gpg_dest // empty")
+    
+    if [[ -n "$gpg_key" && -n "$gpg_dest" ]]; then
+        inf "Importing GPG key to $gpg_dest..."
+        # If dest is a .gpg we dearmor it, if it's .asc we just save it directly
+        sudo mkdir -p $(dirname "$gpg_dest")
+        if [[ "$gpg_dest" == *".gpg" ]]; then
+            curl -fsSL "$gpg_key" | sudo gpg --dearmor --yes -o "$gpg_dest"
+        else
+            curl -fsSL "$gpg_key" | sudo tee "$gpg_dest" >/dev/null
+        fi
+    fi
+
+    # Handle repository
+    local repo_line=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".repo_line // empty")
+    local repo_dest=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".repo_dest // empty")
+
+    if [[ -n "$repo_line" && -n "$repo_dest" ]]; then
+        inf "Adding repository link to $repo_dest..."
+        sudo mkdir -p $(dirname "$repo_dest")
+        echo -e "$repo_line" | sudo tee "$repo_dest" >/dev/null
+        inf "Updating apt cache..."
+        sudo apt update -y
+    fi
+
+    # Handle apt packages installation
+    local apt_pkgs=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".apt_packages[]? // empty")
+    if [[ -n "$apt_pkgs" ]]; then
+        inf "Installing apt packages: $(echo $apt_pkgs | tr '\n' ' ')..."
+        sudo apt update -y
+        # Use simple for loop over words as apt inputs
+        sudo apt install -y $apt_pkgs
+    fi
+
+    # Handle script download and run
+    local run_script=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".url.install_script // empty")
+    local runner=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".script_runner // empty")
+    if [[ -n "$run_script" ]]; then
+        [[ -z "$runner" ]] && runner="bash"
+        inf "Running external script via ($runner)..."
+        curl -fsSL "$run_script" | eval "$runner"
+    fi
+
+    # Handle post-install routines
+    local post=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".post_install // empty")
+    if [[ -n "$post" ]]; then
+        inf "Running post-installation commands..."
+        eval "$post"
+    fi
+
+    msg "Finished installation for '$pkg'."
+}
+
+uninstall_pkg() {
+    local pkg=$1
+    if ! echo "$PKG_JSON" | jq -e ".\"$pkg\"" >/dev/null; then
+        err "Package '$pkg' configuration not found!"
+    fi
+
+    local uninstall_cmd=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".uninstall // empty")
+    
+    msg "Starting uninstall sequence for '$pkg'..."
+    if [[ -n "$uninstall_cmd" ]]; then
+        inf "Running specialized uninstall command..."
+        eval "$uninstall_cmd"
+    else
+        inf "No custom uninstall script found."
+        local apt_pkgs=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".apt_packages[]? // empty")
+        if [[ -n "$apt_pkgs" ]]; then
+            inf "Purging apt packages..."
+            sudo apt --purge remove -y $apt_pkgs
+            sudo apt autoremove -y
+        fi
+        
+        local repo_dest=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".repo_dest // empty")
+        local gpg_dest=$(echo "$PKG_JSON" | jq -r ".\"$pkg\".gpg_dest // empty")
+        
+        if [[ -n "$repo_dest" ]]; then
+            inf "Removing repository..."
+            sudo rm -f "$repo_dest"
+        fi
+        if [[ -n "$gpg_dest" ]]; then
+            inf "Removing GPG key..."
+            sudo rm -f "$gpg_dest"
+        fi
+    fi
+    msg "Uninstall routine complete for '$pkg'."
+}
+
+show_help() {
+    out "Usage: $0 [options]"
+    out "Options:"
+    out "  -i <pkg>   Install <pkg>"
+    out "  -r <pkg>   Uninstall <pkg>"
+    out "  -l         List available packages"
+    out "  -h         Show this help"
+}
+
+if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+while getopts "i:r:lh" opt; do
+    case $opt in
+        i)
+            install_pkg "$OPTARG"
+            ;;
+        r)
+            uninstall_pkg "$OPTARG"
+            ;;
+        l)
+            list_pkgs
+            ;;
+        h)
+            show_help
+            ;;
+        *)
+            err "Invalid option"
+            ;;
+    esac
+done

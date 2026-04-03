@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+tMem=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024))
+if [[ $tMem < 4 ]];then
+	echo -e "memory constarained: $tMem GB"
+	exit 1
+	echo hello test
+fi
+
+los=$(sos-prober | grep -E /|grep -i linux| cut -d: -f1)
+
+for i in $los do;
+	chrootx $i
+done

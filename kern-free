@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+
+#@info remove old kernels
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "$scriptPath")"
+scriptName=${0##*/}
+# import helper/logging lib, exit if unavailable
+source "${scriptDir}/libxlvini" || {
+    echo "'libxlvini' not found in $scriptDir; please ensure it exists for proper msg display"
+}
+
+checkYes() {
+    local promptConf=$1
+    local promptReply=$2
+    if [[ $yesSig == 1 ]]; then
+        if [[ -n $promptReply ]]; then
+            echo -en "$promptReply"
+        fi
+        return 0
+
+    elif [[ -n $promptConf && $promptConf != 0 ]]; then
+        read -p "${promptConf}: " inp_conf
+        if [[ $inp_conf =~ ^[Yy]$ ]]; then
+            if [[ -n $promptReply ]]; then
+                echo -en "$promptReply"
+            fi
+            return 0
+        else
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
+lsHKM() {
+    # list Header Kernel Modules
+    alrt "The following old kernels will be removed:"
+    echo -e "$(inf "Kernel: ")${kernelList[@]}"
+    echo -e "$(inf "Headers: ")${headersList[@]}"
+    echo -e "$(inf "Modules: ")${modulesList[@]}"
+    echo ""
+}
+
+# Process args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    -y) # CAUTION !! apply yes to all operations
+        yesSig=1
+        shift
+        ;;
+    esac
+done
+
+showCkern() {
+    echo -e "$(inf "Kernel-runnin: ")${current_kernelName:-$(inf "!!!")} $(inf "(${current_kernel:-".."})")"
+}
+
+showLkern() {
+    echo -e "$(inf "Kernel-latest: ")${latest_kernelName:-$(inf "!!!")} $(inf "(${latest_kernel:-".."})")"
+}
+
+# Get the current running kernel
+current_kernel="$(uname -r | cut -d - -f 1)"
+latest_kernel="$(dpkg --list | grep -E "linux-image-[0-9]+" | sort -V | tail -n 1 | awk '{print $2}' | cut -d - -f 3)"
+
+# Full kernel name
+current_kernelName="$(dpkg --list | grep -E "linux-image-[0-9]+" | grep -i $(uname -r) | awk '{printf $2}')"
+latest_kernelName="$(dpkg --list | grep -E "linux-image-[0-9]+" | sort -V | tail -n 1 | awk '{print $2}')"
+
+#- out kernel data
+showCkern
+showLkern
+
+# Prepare kernel list to be removed
+if [[ $latest_kernel == $current_kernel ]]; then
+    alrt "system operating on latest available kernel.."
+
+    # prep kernel list to remove # excludes latest kernel
+    kernelList=$(dpkg --list | grep -E "linux-image-[0-9]+" | grep -v $latest_kernel | awk '{print $2}' | tr "\n" " ")
+    headersList=$(dpkg --list | grep -E "linux-headers-[0-9]+" | grep -v $latest_kernel | awk '{print $2}' | tr "\n" " ")
+    modulesList=$(dpkg --list | grep -E "linux-modules-[0-9]+" | grep -v $latest_kernel | awk '{print $2}' | tr "\n" " ")
+
+elif [[ -z $current_kernelName && -z $latest_kernelName ]]; then
+    alrt "system has NO KERNEL, probably in chroot.."
+
+elif [[ -z $current_kernelName && -n $current_kernel ]]; then
+    wrn "system probably in chroot.."
+
+else
+    wrn "system operating on older kernel.."
+
+    # prep kernel list to remove # excludes latest kernel
+    kernelList=$(dpkg --list | grep -E "linux-image-[0-9]+" | grep -v $latest_kernel | grep -v $current_kernel | awk '{print $2}' | tr "\n" " ")
+    headersList=$(dpkg --list | grep -E "linux-headers-[0-9]+" | grep -v $latest_kernel | grep -v $current_kernel | awk '{print $2}' | tr "\n" " ")
+    modulesList=$(dpkg --list | grep -E "linux-modules-[0-9]+" | grep -v $latest_kernel | grep -v $current_kernel | awk '{print $2}' | tr "\n" " ")
+fi
+
+# Check if there are any kernels to remove
+if [[ -z "$kernelList" ]]; then
+    inf "No old kernels found.\n"
+    exit
+fi
+
+# print Kernel Header Modules to be removed
+lsHKM
+
+apt --purge remove ${kernelList[@]} ${headersList[@]} ${modulesList[@]} $(checkYes "0" "-y") && upgrade -xfc >>/dev/null 2>&1
+if [[ $? == 0 ]]; then
+    alrt "Old kernels successfully removed.."
+else
+    wrn "ERR , kernel removal didnt completed succesfyully.."
+fi

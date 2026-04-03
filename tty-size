@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+echo "stty rows $(tput lines) cols $(tput cols)"

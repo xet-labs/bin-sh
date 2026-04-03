@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+# path to droidcam zip
+def_zfile=${mr._rish}/base.x/-armory.x/-zip/-zip.tools/droidcam_latest.zip
+
+clone_lts_Droidcam() {
+	#cd /tmp/	
+	wget -N -O droidcam_latest.zip https://files.dev47apps.net/linux/droidcam_2.0.0.zip
+	# sha1sum: 7b213dcf0bb4ac20d17007f52192c7914b10ed3f
+	droidFile=/tmp/droidcam_latest.zip
+}
+
+instDroidcam() {
+	# Latest versions of Debian, Ubuntu, Fedora have removed libappindicator, which is needed for the system tray icon
+	apt install -y adb pavucontrol libappindicator3-1
+	unzip $droidFile -d droidcam
+	cd droidcam && sudo ./install-client
+
+	#You can use the standard v4l2loopback module, or the DroidCam version v4l2loopback-dc.
+	#The main difference is that you’ll see “DroidCam” in the list of webcams, 
+	#it works with Skype+Chrome without needing exclusive_caps=1, and the install scripts will make sure the module stays loaded after reboot
+	#For v4l2loopback-dc
+	echo -e "\ninstalling videoloop dev.."
+	apt install linux-headers-`uname -r` gcc make
+	./install-video
+
+	echo -e "\ninstalling audio dev"
+	./install-sound
+	pacmd load-module module-alsa-source source_properties=device.description=DroidCam device=hw:Loopback,1,0
+}
+
+rmDroidcam() {
+	inf "removin"
+	sudo /opt/droidcam-uninstall
+}
+
+while getopts if: opt; do
+	case $opt in
+		i ) # install droidcam
+			clone_lts_Droidcam
+			instDroidcam
+			;;
+		f ) # instal droidcam from a pre stored zip
+			droidFile=$OPTARG
+			instDroidcam
+			;;
+		r ) # remove droid cam
+			rmDroidcam
+			exit
+			;;
+	esac
+	#statements
+done
