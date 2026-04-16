@@ -9,17 +9,17 @@ elif [ -d "/root/x" ]; then
     baseSrc="/root/x"
 fi
 
-if [ -d "/x-obs/-rish/@.xet/dox/" ]; then
-    doxSrc="/x-obs/-rish/@.xet/dox"
-elif [ -d "$HOME/x-obs/-rish/@.xet/dox/" ]; then
-    doxSrc="$HOME/x-obs/-rish/@.xet/dox"
+if [ -d "/x.obs/@rish/@.xet/" ]; then
+    doxSrc="/x.obs/@rish/@.xet"
+elif [ -d "$HOME/x.obs/@rish/@.xet/" ]; then
+    doxSrc="$HOME/x.obs/@rish/@.xet"
 elif [ -d "${baseSrc}/local/dox/" ]; then
     doxSrc="${baseSrc}/local/dox"
 fi
 
 # Define default directories
-def_baseDir="${baseSrc}/asset"
-def_otherDirs=("${baseSrc}/res" "$doxSrc")
+def_baseDir="$doxSrc"
+def_otherDirs=("${baseSrc}/asset" "${baseSrc}/local")
 baseDir="${def_baseDir}"
 otherDirs=("${def_otherDirs[@]}")
 
@@ -183,8 +183,6 @@ else
 fi
 }
 
-# Chang dir so that the fil path given by find doesnt include parent path
-cd "${baseDir}" || err "Failed to access basedir '${baseDir}'"
 
 #- export fn's for fzf preview
 export -f inf msg smsg wrn alrt out opr
@@ -201,16 +199,43 @@ if (( ${#validDirs[@]} == 0 )); then
     exit 1
 fi
 
-file="$(find "${validDirs[@]}" -name '.git*' -prune -o -type f -print | (
+# Change dir so docs ($baseDir) file paths dont include parent path
+cd "$(dirname "${baseDir}")" || validDirs=("${validDirs[@]}" "${baseDir}")
+
+file="$(find "$(basename "${baseDir}")" "${validDirs[@]}" -name '.git*' -prune -o -type f -print0 2>/dev/null | sort -u | xargs -0 awk '
+    BEGIN { OFS="" }
+    FNR==1 { title=""; has_title=0; file=FILENAME }
+    /^title:[ \t]*/ {
+        sub(/^title:[ \t]*/, "");
+        title=$0;
+        has_title=1;
+        print file, "\t", title, "  \033[90m", file, "\033[0m";
+        nextfile;
+    }
+    FNR>10 {
+        if (!has_title) {
+            n=split(file, a, "/");
+            print file, "\t", a[n], "  \033[90m", file, "\033[0m";
+        }
+        nextfile;
+    }
+    ENDFILE {
+        if (!has_title && FNR<=10) {
+            n=split(file, a, "/");
+            print file, "\t", a[n], "  \033[90m", file, "\033[0m";
+        }
+    }
+' 2>/dev/null | (
     if (( gistSig )); then
-        fzf --ansi --query="${searchString}" --preview 'bash -c "opr {}"' $fzf_param
+        fzf --delimiter="\t" --with-nth=2.. --ansi --query="${searchString}" --preview 'bash -c "opr {1}"' $fzf_param
     elif (( showSig )); then
-        fzf --ansi --filter="${searchString}" | head -n1
+        fzf --delimiter="\t" --with-nth=2.. --ansi --filter="${searchString}" | head -n1
     else
-        fzf --ansi --query="${searchString}" $fzf_param
+        fzf --delimiter="\t" --with-nth=2.. --ansi --query="${searchString}" $fzf_param
     fi
 ))" &&
     if [[ -n $file ]]; then
+        file="${file%%$'\t'*}"
         #- Perform the action based on the openSig flag
         (( quietSig != 1 )) && opr "$file"
         (( openSig == 1 )) && (xdg-open "$file" || wrn "Failed to open '$file'")

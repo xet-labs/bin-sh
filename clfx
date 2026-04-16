@@ -98,23 +98,36 @@ clfExecAll() {
             [[ -d $(basename "${logFileJson}") ]] &&
             args+=(--logfile "$logFileJson")
 
-        # Run cloudflared instance in background
+        # Snapshot log offset before launch — on error, show only what this run wrote
+        local logOffset=0
+        [[ -f "$logFile" ]] && logOffset=$(wc -c <"$logFile")
+
         (
             cloudflared "${args[@]}" tunnel run >"$logFile" 2>&1
         ) &
         pid=$!
 
-        sleep 0.5
+        # Wait up to 4s — if it dies within that window it's a config/startup error
+        local elapsed=0
+        while (( elapsed < 4 )); do
+            sleep 0.5
+            (( elapsed++ )) || true
+            kill -0 "$pid" 2>/dev/null || break
+        done
+
         if kill -0 "$pid" 2>/dev/null; then
+            # Still alive after 4s → healthy tunnel
             active_pids+=("$pid")
-            sinf "\e[0m>--\c Tunnel exe, PID: $pid '$config'"
+            sinf "\e[0m>--\c Tunnel exe, ${NC}PID: $pid-\c '${NC}$(realpath "$config")-\c'"
         else
-            scrit "Tunnel exited early or failed for config '\e[1m$config--\c'"
+            # Died fast → dump what this run wrote to logFile
+            salrt "Tunnel exited early for config '${NC}$(realpath "$config")-\c'"
+            [[ "$logFile" != "/dev/null" ]] && tail -c "+$((logOffset + 1))" "$logFile" >&2
         fi
     done
 
     if [[ "${#active_pids[@]}" -gt 0 ]]; then
-        sinf "Tunnels running, PIDs: ${active_pids[*]}"
+        sinf "${#active_pids[@]} Tunnels running, PIDs: ${active_pids[*]}"
         [[ "${noLogSig:-0}" -ne 1 ]] && sinf "Logs: ${logDir}/*"
     fi
 }

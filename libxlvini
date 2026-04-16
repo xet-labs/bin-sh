@@ -65,14 +65,14 @@ BASE16_THEME=${BASE16_THEME:-}
 msgCalled=0
 cc=()
 
-# add -u for UTC standard tipestamp
+# add `-u` for UTC standard tipestamp
 timestamp() { date +"%Y%m%d.%H%M%S"; }
 
 log_pre_setup() {
-    # asynchronous log writer, wooow !! may cause out-of-order sync to file!!
-    # no-worries each log includes timestamp, so prioritizing perfomance
+    # wooow!! asynchronous log writer, it may (rarely) cause out-of-order log lines sync to logfile!!
+    # no-worries each log includes timestamp, so prioritizing performance !!
     exec 3>>"$logFile"
-    echo -e "\n$(timestamp) >> ${ScriptPath}" >&3
+    echo -e "\n$(timestamp) << ${ScriptPath}" >&3
     trap 'script_post' EXIT INT TERM
 }
 # placeholder for actual fn as the `post_script` fn will use {utility} fn, and {utility} fn uses `out` fn
@@ -142,8 +142,8 @@ out() {
     mode="${3:-}"
     cx="${4:-0}"
     local msg0=""
-    local Scope="${Scope:-${scope:-${scriptName}}}"
-    ((${scopeSig:-0})) && scopeMsg="${scopeMsg:-${BLACK}[${BLUE}${BOLD}${Scope}${BLACK}]-\c }"
+    local scope="${SCOPE:-${scope:-${scriptName}}}"
+    ((${scopeSig:-0})) && scopeMsg="${scopeMsg:-${BLACK}[${BLUE}${BOLD}${scope}${BLACK}]-\c }"
     #append log timestamp based on log sig, if 1 simply show timestamp in logfile itf 2 show in output as well
     # LogSig=nolog is mean whent LogSig={1,2} and u want to print smthing in terminal but not in the log file
     # set the just befor the message fn call, like:

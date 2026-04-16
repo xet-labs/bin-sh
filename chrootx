@@ -538,12 +538,12 @@ c_TERMINAL_TITLE_PID=$!
 # show chroot info
 (
     # echo ""
-    sinf "[\
+    sinf "[ \
 $([ -n "$cBlock" ] && echo "${BLUE}${cBlockType:-block}-\c -> ${NC}$cBlock-\c$([ -n "$cBlockFs" ] && echo " -> ${NC}$cBlockFs-\c") | ")\
 $([ -n "$cPath" ] && echo "${BLUE}$cPath-\c")\
 $([ -n "$cShell" ] && echo " | ${BLUE}$cShell-\c")\
 $([ $# -gt 0 ] && echo -n " | ${BLUE}$*-\c")\
-]"
+ ]"
     # [[ ! -t 0 ]] && echo ""
 )
 }

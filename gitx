@@ -1,184 +1,324 @@
 #!/usr/bin/env bash
 
-this_path="${PWD:-$(pwd)}"
-this_path_real="$(readlink -f ${this_path})"
-scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
-scriptDir="$(dirname "${scriptPath}")"
-scriptName=${0##*/}
+{
+    this_path="${PWD:-$(pwd)}"
+    this_path_real="$(readlink -f ${this_path})"
+    scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
+    scriptDir="$(dirname "${scriptPath}")"
+    scriptName=${0##*/}
+
+    # Conditional defaults
+    stdoutIsTTY=0
+    [ -t 1 ] && stdoutIsTTY=1
+
+    # Arguments
+    declare -a EARG=()
+    # Flags/Signals
+    cmdAddSafeDirSig=0
+    cmdListRepoSig=0
+    cmdCheckoutTagSig=0
+    cmdSyncSig=0
+    has_unhandled_cmd=0
+    gitMsgSig=0
+}
+
 source "${scriptDir}/libxlvini"
 
-_git_push() {
-    sinf "${_branch} ⬆️  Pushing local changes.."
-    if ! git push origin "$gitBranch"; then
-        swrn "${_branch} ❌ Failed to push changes"
+_git() { git -C "$TARGET_REPO_DIR" "$@"; }
+_remote_url() { _git remote get-url "${1:-$TARGET_ORIGIN}" 2>/dev/null; }
+_branch() { _git -C "${1:-$TARGET_REPO_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null; }
+_rev_parse() { _git -C "${1:-$TARGET_REPO_DIR}" rev-parse "$(_branch)" 2>/dev/null; }
+
+_push() {
+    local target_origin="${1:-$TARGET_ORIGIN}" target_branch="${2:-$(_branch)}"
+    sinf "⬆️  pushing changes from '${1:-$TARGET_REPO_DIR}'.."
+    if ! _git push "$target_origin" "$target_branch"; then
+        swrn "failed to push changes"
         return 1
     fi
 }
 
-_git_checkout_tag() {
-    scope=Git-checkout
-    checkout_tag="${1:-$gitTag}"
-    checkout_tag="${checkout_tag:-$(git tag | fzf)}"
-    sinf "${_branch} Checking out to tag ${checkout_tag}"
-    git checkout "${checkout_tag}"
-}
-
-_git_sync() {
-    scope=git-sync
-
-    gitMsg="sync-${gitMsg}"
-    committed=0
-
-    echo ""
-
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        sinf "${_branch} 💾 Committing changes '${this_path_real}' - '$gitMsg'"
-        git add -A && git commit -m "$gitMsg" && committed=1
-    else
-        sinf "${_branch} ✅ Working tree is clean '${this_path_real}'"
-    fi
-
-    sinf "${_branch} ⬇️  Fetching remote changes.."
-    # gitRefRemote="$(git ls-remote origin "$gitBranch" | cut -f1)"
-    if git pull origin "$gitBranch" --rebase; then
-        gitRefNew=$(git rev-parse HEAD)
-
-        if [ "$gitRef" != "$gitRefNew" ] || [ "$committed" -eq 1 ]; then
-            _git_push
-        else
-            sinf "${_branch} 🔄 Working tree already synced"
+_add_safe_dir() {
+    local dir="${1:-$TARGET_REPO_DIR}"
+    if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$dir"; then
+        if ! git config --global --add safe.directory "$dir"; then
+            swrn "failed to add '${dir}' to safe.directory"
+            return 1
         fi
-    else
-        swrn "${_branch} ❌ Failed to fetch changes"
-        return 1
     fi
 }
 
-_git_scan_repo() {
-    local base="${1:-.}"
-    local max_depth="${2:-5}"
-    local count=1
-    local base_slash_count=$(grep -o "/" <<<"$base" | wc -l)
+_checkout_tag() {
+    declare -a LARG=()
+    usage() {
+        (($usage_skip)) && { EARG+=("$1");return; }
+        cat <<EOF
+Usage: $(basename "$0") cot [<options>] [<tag>]
 
-    if [[ -d "./.git" ]]; then
-        printf " 🌐 $(inf "Remote url:") %s\n" "$(msg "${gitUrl:-$(alrt "No remote url found!!")}")"
-        printf " 📁 $(inf "Local path:") %s\n" "$([ -n "$gitDir" ] && echo -n "$(realpath "$gitDir")" || alrt "No local path found!!")"
-        return
+Checkout a specific git tag. If no tag is provided, use -i to select one interactively.
+
+Options:
+    -i, --interactive      Select tag interactively
+    -h, --help             Display this help message
+EOF
+    exit 0
+    }
+
+    local target_tag interactive_select_sig=0
+    local usage_skip=0
+    # parse args
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+        -i | --interactive)        interactive_select_sig=1; shift ;;
+        -h | --help)               usage "$1";;
+        *)                         target_tag="$1";;
+        esac
+        shift
+    done
+
+    if (($interactive_select_sig)); then
+        [[ $(_git tag | wc -l) -eq 0 ]] && { swrn "repo has no tag!!"; exit 1; }
+        local _tag="$(_git tag | fzf)"
+        [[ -z "$_tag" ]] && { swrn "no tag selected!!"; exit 1; }
+        sinf "checkout tag: '$_tag'"
+        _git checkout "${_tag}" && exit 0 || exit $?
     fi
 
-    echo ""
-    scan_dir() {
-        local dir="$1"
-        # local dir="$(realpath "$1")"
+    [[ -z "$target_tag" ]] && { swrn "no tag passed!!"; usage; exit 1; }
+
+    if _git show-ref --tags --quiet --verify "refs/tags/${target_tag}"; then
+        _git checkout "${target_tag}" && exit 0 || exit $?
+    fi
+    swrn "Tag '${target_tag}' does not exist"; exit $?
+}
+
+git_sync() {
+    declare -a LARG=()
+    usage() {
+        (($usage_skip)) && { EARG+=("$1");return; }
+        cat <<EOF
+Usage: $(basename "$0") sync [<options>] [<branch>]
+
+Sync changes with remote branch (add, commit, pull, push automatically).
+
+Options:
+    -c                     Checkout to specified branch before syncing
+    -m <msg>               Commit message for unsaved changes to be synced
+    -O, --origin <name>    Target remote origin (default: origin)
+    -h, --help             Display this help message
+EOF
+    exit 0
+    }
+
+    local commit_msg="sync-${COMMIT_MSG}" target_origin="${TARGET_ORIGIN}" target_branch="${TARGET_BRANCH}"
+    local checkout_sig=0
+    local usage_skip=0
+    # parse args
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+        -c)                        checkout_sig=1;;
+        -m)                        commit_msg="$2"; LARG+=("$1" "$2"); shift ;;
+        -O | --origin)             target_origin="$2"; shift ;;
+        -h | --help)               usage "$1";;
+        -*)                        LARG+=("$1");;
+        *)                         target_branch="$1";;
+        esac
+        shift
+    done
+
+    local repo_origin_uptodate_sig=0 repo_uptodate_sig=0 branch_origin_uptodate_sig=0 branch_uptodate_sig=0
+
+    #- checkout to branch if exists 
+    if (($checkout_sig)) && [[ -n "${target_branch}" ]]; then
+        if [ "$(_branch)" != "${target_branch}" ]; then
+            salrt "switching: $(_branch) != ${target_branch}"
+            if _git show-ref --verify --quiet refs/heads/"$target_branch"; then
+                _git checkout "$target_branch"
+            else
+                if _git fetch "${target_origin}" "$target_branch"; then
+                    branch_origin_uptodate_sig=1
+                    _git checkout -b "$target_branch" "${target_origin}"/"$target_branch"
+                else
+                    swrn "branch '${target_branch}' does not exist!!"
+                    exit 1
+                fi
+            fi
+        fi
+    fi
+
+    #- commit unsaved changes
+    if ! _git diff --quiet || ! _git diff --cached --quiet; then
+        sinf "💾 commiting changes '${TARGET_REPO_DIR}' - '$commit_msg'"
+        _git add -A && _git commit -m "$commit_msg"
+    else
+        sinf "✅ working tree is clean '${TARGET_REPO_DIR}'"
+    fi
+
+    local current_branch="$(_branch)"
+    sinf "⬇️  fetching remote changes for '${target_origin}' '$current_branch'"
+    if ! (($branch_origin_uptodate_sig)); then
+        if _git fetch "${target_origin}" "$current_branch"; then
+            branch_origin_uptodate_sig=1
+        else
+            swrn "failed to fetch changes!!"
+            exit 1
+        fi
+    fi
+
+    #- rebasing remote changes to local
+    _git rebase -X theirs "${target_origin}/${current_branch}"
+
+    #- push new changes
+    local unpushed_commits=$(_git rev-list --count "${target_origin}/${current_branch}..HEAD" 2>/dev/null)
+    
+    # If unpushed_commits is empty (remote branch missing) or > 0, we need to push
+    if [[ -z "$unpushed_commits" ]] || [[ "$unpushed_commits" -gt 0 ]]; then
+        _push
+    else
+        sinf "🔄 Working tree already synced"
+    fi
+    exit 0
+}
+
+git_list_repo() {
+    local target_repo_dir="${TARGET_REPO_DIR:-$PWD}"
+    local list_repo_scan_depth=5
+
+    declare -a LARG=()
+    usage() {
+        (($usage_skip)) && { EARG+=("$1");return; }
+        cat <<EOF
+Usage: $(basename "$0") lr [<options>]
+
+Scan and list git repositories recursively from the target directory.
+
+Options:
+    -D, --depth <num>      Depth for repo scanning (default: $list_repo_scan_depth)
+    -h, --help             Display this help message
+EOF
+    exit 0
+    }
+
+    local usage_skip=0
+    # parse args
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+        -D | --depth)              gitDepth="$2"; shift ;;
+        -h | --help)               usage "$1";;
+        *)                        LARG+=("$1");;
+        esac
+        shift
+    done
+
+    local base_depth_count=$(grep -o "/" <<<"$target_repo_dir" | wc -l)
+    local count=1
+    __list_repo() {
+        local dir="${1%/}"
+        local index_enabled="${2:-0}"
+        local recursive_enabled="${3:-0}"
 
         # Calculate current depth
-        local cur_slash_count=$(grep -o "/" <<<"$dir" | wc -l)
-        local depth=$((cur_slash_count - base_slash_count))
-        [[ $depth -gt $max_depth ]] && return
+        local cur_depth_count=$(grep -o "/" <<<"$dir" | wc -l)
+        local depth=$((cur_depth_count - base_depth_count))
+        [[ $depth -gt $list_repo_scan_depth ]] && return
 
         if [[ -d "$dir/.git" ]]; then
-            local url
-            url=$(git -C "$dir" remote get-url origin 2>/dev/null)
+            local url=$(TARGET_REPO_DIR="$dir" _remote_url 2>/dev/null)
 
-            # Format index like '  1)'
-            local index
-            index=$(printf "%3d)" "$count")
-
-            # Length of prefix (e.g. '  1) ') used to align the 🌐 line
-            local padlen=${#index}
-            local pad
-            pad=$(printf "%*s" "$padlen" "")
+            if ((${index_enabled})); then
+                # Format index like '  1)'
+                local index=$(printf "%3d)" "$count")
+                # Length of prefix (e.g. '  1) ') used to align the 🌐 line
+                local padlen=${#index}
+                local pad=$(printf "%*s" "$padlen" "")
+            fi
 
             # Print aligned output
-            printf "%s 🌐 $(inf "Remote-url:") %s\n" "$index" "$(msg "${url:-$(alrt "No remote url found!!")}")"
-            printf "%s 📁 $(inf "Local-path:") %s\n" "$pad" "$([ -n "$dir" ] && echo -n "$(realpath "$dir")" || alrt "No local path found!!")"
+            printf "%s 🌐 $(inf "url: ") %s\n" "$index" "$(msg "${url:-$((($stdoutIsTTY)) && alrt "empty!!")}")"
+            printf "%s 📁 $(inf "path:") %s\n" "$pad" "$([ -n "$dir" ] && echo -n "$dir" || ( (($stdoutIsTTY)) && alrt "empty!!"))"
             echo ""
 
             count=$((count + 1))
             return # Do NOT recurse into subfolders of a git repo
         fi
 
-        for sub in "$dir"/*/; do
-            [[ -d "$sub" ]] && scan_dir "${sub%/}"
-        done
+        if (($recursive_enabled)); then
+            for sub in "$dir"/*/; do
+                [[ -d "$sub" ]] && __list_repo "${sub%/}" "$index_enabled" "$recursive_enabled"
+            done
+        fi
     }
 
-    scan_dir "$base"
+    if [[ -d "${target_repo_dir}/.git" ]]; then
+        __list_repo "$target_repo_dir"
+        exit 0
+    fi
+
+    __list_repo "$target_repo_dir" 1 1 || exit 1
+    exit 0
 }
 
 usage() {
+    (($usage_skip)) && { EARG+=("$1");return; }
     cat <<EOF
-Usage: $(basename "$0") -m <commit-message>
+Usage: $(basename "$0") [COMMAND] [OPTIONS] [GIT_ARGS...]
+
+A wrapper script for common git operations and syncing.
+
 Options:
-    -m              Commit message (optional)
-    -b              Branch (optional)
-    -s|sync         Sync changes
-    -h              Display this help message
-    add-safe-dir    Safe dir
+    -C <path>              Target repo path for operations (current: $PWD)
+    -b, --branch <name>    Target branch for operations
+    -m <msg>               Custom commit message (prepended with metadata)
+    -h, --help             Display this help message
+    --safe-dir             Add target directory to git safe.directory config
+
+Commands:
+    cot, checkout-tag      Checkout a specific tag
+    lr                     Scan and list repositories from target directory
+    sync                   Add, commit, pull, and push changes automatically
+
+Any unhandled arguments are passed directly to 'git'.
+
+$(git --help)
 EOF
+exit 0
 }
 
-#- Parse args
+# Default values
+export TARGET_REPO_DIR="$PWD"
+export TARGET_ORIGIN="origin"
+export TARGET_BRANCH="$(_branch)"
+usage_skip=0
+# parse args
+[[ $# == 0 ]] && usage
 while [[ $# -gt 0 ]]; do
     case $1 in
-    add-safe-dir)
-        gitAddSafeDirSig=1
-        ;;
-    d | -d | dir | --dir)
-        gitDir="$2"
-        shift
-        ;;
-    depth | --depth)
-        gitDepth="$2"
-        shift
-        ;;
-    b | -b | branch)
-        gitBranch=$2
-        shift
-        ;;
-    m | -m | msg)
-        gitMsg=$2
-        shift
-        ;;
-    t | -t | tag)
-        gitTag=$2
-        shift
-        ;;
-    cot | --cot | checkout-tag)
-        gitCheckoutTagSig=1
-        ;;
-    s | -s | --sync | sync)
-        gitSyncSig=1
-        ;;
-    ls | lr | listrepo | --listrepo)
-        gitListRepoSig=1
-        ;;
-    h | --help)
-        usage
-        exit 0
-        ;;
-    *)
-        alert "Invalid option $1"
-        usage
-        exit 1
-        ;;
+    -b | --branch)          TARGET_BRANCH="$2"; shift ;;
+    -C)                     TARGET_REPO_DIR="$2"; EARG+=("$1" "$2"); shift ;;
+    -m )                    COMMIT_MSG="$2"; EARG+=("$1" "$2"); shift ;;
+    --safe-dir)             cmdAddSafeDirSig=1; usage_skip=1;;
+    cot | checkout-tag)     cmdCheckoutTagSig=1; usage_skip=1;;
+    lr)                     cmdListRepoSig=1; usage_skip=1;;
+    sync)                   cmdSyncSig=1; usage_skip=1;;
+    -h | --help)            usage "$1";;
+    -*)                     EARG+=("$1");;
+    *)                      EARG+=("$1"); usage_skip=1;;
     esac
     shift
 done
 
+TARGET_REPO_DIR=${TARGET_REPO_DIR%/}
+
 #- Set default commit message and branch if not provided
 export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
-gitDir="${gitDir:-$PWD}"
-gitUrl="${gitUrl:-$(git -C "$dir" remote get-url origin 2>/dev/null)}"
-gitBranch="${gitBranch:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null)}"
-gitRef="$(git rev-parse ${gitBranch} 2>/dev/null)"
+commitMsgPreTpl="$(hostname)${USERNAME:+.${USERNAME}}-$(date '+D%Y.%m.%d')"
+commitMsgPostTpl="$(date '+T%H:%M:%S-%a')"
+COMMIT_MSG="${COMMIT_MSG:+$commitMsgPreTpl $COMMIT_MSG}"
+COMMIT_MSG="${COMMIT_MSG:-${commitMsgPreTpl}-$commitMsgPostTpl}"
 
-_branch="${BLUE}(${DARK}${gitBranch}${BLUE})--\c"
-gitMsgMeta="$(hostname)-$(date '+%Y-%m-%d-%a')"
-gitMsg="${gitMsg:+$gitMsgMeta $gitMsg}"
-gitMsg="${gitMsg:-$gitMsgMeta:$(date '+%H%M%S')}"
+((cmdAddSafeDirSig)) && _add_safe_dir "$TARGET_REPO_DIR"
+((cmdCheckoutTagSig)) && _checkout_tag "${EARG[@]}"
+((cmdListRepoSig)) && git_list_repo "${EARG[@]}"
+((cmdSyncSig)) && git_sync "${EARG[@]}"
 
-[ ${gitAddSafeDirSig:-0} -eq 1 ] && git config --global --add safe.directory "${gitDir}"
-[ ${gitListRepoSig:-0} -eq 1 ] && _git_scan_repo "${gitDir:-$PWD}" "${gitDepth:-4}" || :
-[ ${gitCheckoutTagSig:-0} -eq 1 ] && _git_checkout_tag || :
-[ ${gitSyncSig:-0} -eq 1 ] && _git_sync || :
+[[ ${#EARG[@]} -gt 0 ]] && git "${EARG[@]}"

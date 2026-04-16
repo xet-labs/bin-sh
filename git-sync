@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# git-sync.sh — find all git repos and btrfs subvolumes, update and reset em
+# Usage: ./git-sync.sh [search_root]
+# Default search root is $HOME
+
+set -euo pipefail
+
+ROOT="${1:-$HOME}"
+BOLD="\e[1m"
+GREEN="\e[32m"
+YELLOW="\e[33m"
+RED="\e[31m"
+CYAN="\e[36m"
+RESET="\e[0m"
+
+ok()   { echo -e "  ${GREEN}✔${RESET} $*"; }
+warn() { echo -e "  ${YELLOW}⚠${RESET} $*"; }
+err()  { echo -e "  ${RED}✘${RESET} $*"; }
+info() { echo -e "  ${CYAN}→${RESET} $*"; }
+hr()   { echo -e "\n${BOLD}────────────────────────────────────────${RESET}"; }
+
+# ─── GIT REPOS ────────────────────────────────────────────────────────────────
+
+hr
+echo -e "${BOLD}GIT REPOSITORIES${RESET} (searching under $ROOT)"
+hr
+
+mapfile -t GIT_DIRS < <(
+  find "$ROOT" \
+    -type d -name ".git" \
+    -not -path "*/\.*/.git" \
+    -not -path "*/node_modules/*" \
+    -not -path "*/__pycache__/*" \
+    2>/dev/null
+)
+
+if [[ ${#GIT_DIRS[@]} -eq 0 ]]; then
+  warn "No git repos found under $ROOT"
+else
+  for gitdir in "${GIT_DIRS[@]}"; do
+    repo="${gitdir%/.git}"
+    echo -e "\n${BOLD}$(basename "$repo")${RESET}  ${CYAN}$repo${RESET}"
+
+    cd "$repo" || { err "Cannot cd into $repo"; continue; }
+
+    # Check for uncommitted changes
+    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+      warn "Uncommitted changes detected — stashing"
+      git stash push -m "git-sync auto-stash $(date '+%Y-%m-%d %H:%M')" && ok "Stashed"
+    fi
+
+    # Fetch all remotes
+    if git remote | grep -q .; then
+      info "Fetching all remotes..."
+      if git fetch --all --prune 2>/dev/null; then
+        ok "Fetched"
+      else
+        err "Fetch failed — skipping reset"
+        continue
+      fi
+
+      # Detect default branch (main or master)
+      DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null \
+        | sed 's@^refs/remotes/origin/@@' \
+        || git remote show origin 2>/dev/null \
+        | grep 'HEAD branch' \
+        | awk '{print $NF}' \
+        || echo "main")
+
+      CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+
+      if [[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+        git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null \
+          && ok "Reset to origin/$DEFAULT_BRANCH" \
+          || err "Reset failed"
+      else
+        warn "On branch '$CURRENT_BRANCH' (not '$DEFAULT_BRANCH') — only fetched, not reset"
+        info "Run manually: git reset --hard origin/$DEFAULT_BRANCH"
+      fi
+    else
+      warn "No remotes configured — skipping"
+    fi
+
+    cd - > /dev/null
+  done
+fi
+
+# ─── BTRFS SUBVOLUMES ─────────────────────────────────────────────────────────
+
+hr
+echo -e "${BOLD}BTRFS SUBVOLUMES${RESET}"
+hr
+
+if ! command -v btrfs &>/dev/null; then
+  warn "btrfs-progs not found — skipping subvolume section"
+else
+  # Find all btrfs mounts
+  mapfile -t BTRFS_MOUNTS < <(
+    findmnt -t btrfs -o TARGET -n 2>/dev/null || true
+  )
+
+  if [[ ${#BTRFS_MOUNTS[@]} -eq 0 ]]; then
+    warn "No btrfs mounts detected"
+  else
+    for mount in "${BTRFS_MOUNTS[@]}"; do
+      echo -e "\n${BOLD}Mount:${RESET} $mount"
+
+      # List all subvolumes under this mount
+      mapfile -t SUBVOLS < <(
+        sudo btrfs subvolume list "$mount" 2>/dev/null \
+          | awk '{print $NF}' \
+          || true
+      )
+
+      if [[ ${#SUBVOLS[@]} -eq 0 ]]; then
+        warn "No subvolumes found"
+        continue
+      fi
+
+      for sv in "${SUBVOLS[@]}"; do
+        svpath="$mount/$sv"
+        echo -e "\n  ${BOLD}$sv${RESET}"
+
+        # Check if this subvolume is also a git repo
+        if [[ -d "$svpath/.git" ]]; then
+          info "Also a git repo — already handled above"
+          continue
+        fi
+
+        # Show subvolume info
+        if sudo btrfs subvolume show "$svpath" &>/dev/null; then
+          GENERATION=$(sudo btrfs subvolume show "$svpath" 2>/dev/null \
+            | grep "Generation:" | awk '{print $2}')
+          ok "Subvolume OK  (generation: $GENERATION)"
+        else
+          warn "Could not inspect $svpath"
+        fi
+      done
+    done
+
+    # Optional: scrub check (comment out if too slow)
+    echo ""
+    info "Tip: run ${BOLD}sudo btrfs scrub start -B <mountpoint>${RESET} to verify data integrity"
+  fi
+fi
+
+# ─── SUMMARY ──────────────────────────────────────────────────────────────────
+
+hr
+echo -e "${BOLD}Done.${RESET}"
+echo -e "  Git repos found : ${#GIT_DIRS[@]}"
+hr

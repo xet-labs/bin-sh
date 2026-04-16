@@ -6,18 +6,18 @@ scriptName=${0##*/}
 
 source "${scriptDir}/libxlvini"
 
-arg="$@"
-scriptDir="$(dirname $(readlink -f "${BASH_SOURCE[0]}"))"
-export GNIREHTET_APK="${scriptDir}/../../app.res/gnirehtet/gnirehtet.apk"
-
 case $1 in
 java)
     shift
+    jar_src="$(dirname $(realpath $(xbin -r gnirehtet)))/gnirehtet.jar"
+    
+    [[ -f "${jar_src}" ]] || { swrn "gnirehtet.jar not found!"; exit 1; }
+
     sinf "java"
-    java -jar "${scriptDir}/../../app.res/gnirehtet/gnirehtet.jar" "${@}"
+    java -jar "${jar_src}" "${@}"
     ;;
 *)
     sinf "rust"
-    exec "$scriptDir/xbin" gnirehtet "${@}"
+    xbin gnirehtet "${@}"
     ;;
 esac

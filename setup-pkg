@@ -15,6 +15,7 @@ source "${scriptDir}/libxlvini"
 
 PKG_CATEGORY=(
     pkg_user
+    pkg_ops
     pkg_firmware
     pkg_user_gui
     pkg_recovery
@@ -30,12 +31,19 @@ PKG_CATEGORY=(
     pkg_dep
 )
 
+pkg_sys=(
+    zram-tools
+    lvm2
+    btrfs-progs btrbk
+    memtest86+
+)
+
 pkg_user=(
     jq
     rsync
     git
-    fzf
-    glow
+    fzf glow
+    tree
     ranger
     tmux
 
@@ -46,30 +54,52 @@ pkg_user=(
     rclone
     borgbackup
 )
+pkg_user_dev=(
+    minicom
+    android-sdk-platform-tools 
+    adb
+    scrcpy
 
+    figlet
+)
+
+pkg_ops=(
+    keepalived
+
+    caddy
+    grafana prometheus
+    pdns-server pdns-recursor
+    pdns-backend-geoip
+    pdns-backend-sqlite3 sqlite3
+    # pdns-backend-mysql mariadb-server
+
+    postgresql postgresql-contrib redis-server
+)
+pkg_ops_cli=(
+    prometheus-node-exporter
+)
 pkg_firmware=(
-    firmware-linux-nonfree
-    firmware-misc-nonfree
     intel-microcode
     amd64-microcode
+    firmware-linux-nonfree
+    firmware-misc-nonfree
     firmware-realtek
     firmware-iwlwifi
     dbus-x11
-    mesa-utils
 )
 pkg_user_gui=(
+    libnotify-bin
     libfuse2t64
+
+    zsh zsh-autosuggestions zsh-syntax-highlighting
+
+    gnome-shell-extensions gnome-shell-extension-prefs gnome-shell-extension-manager
+    gdm3 gnome-session gnome-shell
 
     fonts-firacode
     fonts-font-awesome
     fonts-lato
     fonts-noto-core
-
-    zsh zsh-autosuggestions zsh-syntax-highlighting
-    
-    gnome-shell-extensions gnome-shell-extension-prefs gnome-shell-extension-manager
-    gdm3 gnome-session gnome-shell
-
     baobab
     gparted
     vlc
@@ -78,7 +108,6 @@ pkg_user_gui=(
     remmina
     #timeshift	bleachbit
 )
-
 pkg_build=(
     bc
     flex
@@ -98,33 +127,13 @@ pkg_build=(
     gcc-arm-linux-gnueabi
 )
 pkg_devops=(
-    ansible
-
+    ansible terraform
     jenkins # circle ci
-
-    terraform
-
-    prometheus
-    grafana
 
     vault
 )
-pkg_sys=(
-    lvm2
-    zram-tools
-    memtest86+
-    btrfs-progs
-    btrbk
-)
-pkg_dev=(
-    minicom
-    android-sdk-platform-tools
-    adb
-    scrcpy
-
-    figlet
-)
 pkg_devs=(
+    
     qemu-user-static binfmt-support
 
     pip
@@ -134,47 +143,49 @@ pkg_devs=(
     #- CPU architecture emulators, For bridged networking
     #qemu-system bridge-utils
 )
-pkg_util=(
-    curl
-    iw
-    iproute2
-    openssh-server sshfs
-    x11-utils
-
-    #net-tools 	#- depreciated as iproute2 appreciated!!
+pkg_graphics=(
+    ffmpeg
+    imagemagick
 )
 pkg_recovery=(
     testdisk
 )
-pkg_net=(
+pkg_util=(
+    x11-utils
+
+)
+pkg_net_sys=(
+    ifmetric
     dnsmasq
     hostapd
     wpasupplicant
+)
+pkg_net_util=(
+    curl
+    ethtool
+    iproute2
+    iputils-arping
+    isc-dhcp-server #dhcpd|dhcp
+    iw
+    #net-tools 	#- depreciated as iproute2 appreciated!!
+)
+pkg_net_diagnostic=(
+    mesa-utils
+)
+pkg_net_tool=(
+    hping3
+    ipcalc
+    iperf3
+    macchanger
+    nmap
+    tcpdump
     usbip
 )
-pkg_tool=(
-    iputils-arping
-    ethtool
-    tcpdump
-    iperf3
-    ipcalc
-    nmap
-    hping3
-    macchanger
-)
-pkg_tools=(
-    isc-dhcp-server #dhcpd|dhcp
-    net-tools       #route
-    hostapd
-    lighttpd
-    php-cgi
-
+pkg_net_sec=(
     cowpatty
-    mdk3
-    mdk4
     dsniff
-
-    #tshark
+    mdk3 mdk4
+    tshark
 
     wordlists
 
@@ -182,50 +193,48 @@ pkg_tools=(
 
     #tor proxychains
 )
-pkg_dep=(
 
-
+pkg_srv=(
+    openssh-server #- access
+    avahi-daemon avahi-utils
 )
+pkg_srv_file=(
+    sshfs
+    samba
+    nfs-common nfs-kernel-server
+)
+pkg_srv_bundle=(
+    #- databases
+    mariadb-server mariadb-client ghostscript
+    
+    openssl
+    
+    #- web server
+    nginx 
+    php php-cgi php-fpm php-mysql libapache2-mod-php 
+
+    #- php-perf.modules
+    php-apcu php-memcached php-redis
+
+    #- php.modules
+    php-common php-curl php-gd php-mbstring php-ctype php-dom php-fileinfo php-json php-simplexml php-pdo-mysql php-posix php-xml php-xmlreader php-xmlwriter php-zip
+
+    #- php.recommended
+    php-bz2 php-intl php-exif php-gmp php-imagick
+
+    #- php-required for spec app
+    php-ldap php-smbclient php-ftp php-imap php-bcmath
+
+    #not found
+    # php-filter php-hash php-libxml php-openssl php-session php-zlib
+)
+pkg_dep=()
 
 pkg_extra=(
     virtualbox
     kicad
 )
 
-pkg_srv=(
-    avahi-daemon avahi-utils
-    prometheus-node-exporter
-
-    mariadb-server mariadb-client
-
-    samba
-    nfs-common nfs-kernel-server
-
-    nginx openssl keepalived
-)
-
-pkg_srv_bundle=(
-    # -required modules
-    nginx php php-cgi php-fpm php-mysql libapache2-mod-php mariadb-server mariadb-client mariadb-server ghostscript
-
-    # -php-modules
-    php-common php-curl php-gd php-mbstring php-ctype php-dom php-fileinfo php-json php-simplexml php-pdo-mysql php-posix php-xml php-xmlreader php-xmlwriter php-zip
-
-    # -server-perfomance
-    php-apcu php-memcached php-redis
-
-    # -recommended
-    php-bz2 php-intl php-exif php-gmp php-imagick
-
-    # -preview gen
-    imagemagick ffmpeg
-
-    # -required for spec app
-    php-ldap php-smbclient php-ftp php-imap php-bcmath
-
-    #not found
-    # php-filter php-hash php-libxml php-openssl php-session php-zlib
-)
 
 pkgInstAllSig=0
 pkgNo=()

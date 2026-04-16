@@ -7,10 +7,26 @@ source "${scriptDir}/libxlvini" || {
     echo "'libxlvini' not found in $scriptDir; please ensure it exists for proper msg display"
 }
 
-if [ -d /x-obs/ ]; then
-    cd /x-obs/
-elif [ -d ~/x-obs/ ]; then
-    cd ~/x-obs/
+# ==========================================
+# SINGLE INSTANCE LOCK
+# ==========================================
+# Open file descriptor 9 and attach it to a lock file in the temporary directory
+lock_file="${TMPDIR:-/tmp}/${scriptName}.lock"
+touch "$lock_file"
+trap 'rm -f "$lock_file"' EXIT
+exec 9>"$lock_file"
+
+# Try to get an exclusive, non-blocking lock. If it fails, another instance is running.
+if ! flock -n 9; then
+    serr "Another instance of $scriptName is already running. Exiting."
+    exit 1
+fi
+# ==========================================
+
+if [ -d /x.obs/ ]; then
+    cd /x.obs/
+elif [ -d ~/x.obs/ ]; then
+    cd ~/x.obs/
 elif [ -d /x/obs/ ]; then
     cd /x/obs/
 elif [ -d ~/x/obs/ ]; then
@@ -20,4 +36,4 @@ else
     exit 1
 fi
 
-$scriptDir/gitx add-safe-dir sync branch main
+$scriptDir/gitx sync --safe-dir -c -b main

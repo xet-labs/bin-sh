@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+# Optional: Force it to use the system's ADB if you prefer
+export ADB="$(xbin --resolve adb)"
+
+# Execute the actual binary and pass along any arguments
+xbin scrcpy "$@"

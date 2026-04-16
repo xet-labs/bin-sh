@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+apt install -y prometheus-node-exporter btrfs-progs btrbk rsync zram-tools ifmetric iputils-arping ethtool tcpdump iperf3 sshfs nfs-common samba avahi-daemon lm-sensors tmux btop fzf git ranger glow tree minicom cmatrix zsh zsh-autosuggestions zsh-syntax-highlighting gnome-shell-extensions gnome-shell-extension-manager libfuse2t64 flatpak vlc gparted golang mariadb-server gdm3 gnome-session gnome-shell fonts-firacode fonts-font-awesome fonts-lato fonts-noto-core
+
+
+apt install -y prometheus-node-exporter btrfs-progs btrbk rsync zram-tools ifmetric iputils-arping ethtool tcpdump iperf3 sshfs nfs-common avahi-daemon lm-sensors tmux btop fzf git ranger glow tree zsh zsh-autosuggestions zsh-syntax-highlighting

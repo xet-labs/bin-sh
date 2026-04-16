@@ -1,113 +1,343 @@
 #!/usr/bin/env bash
 
-# Paths Configuration
-CONF="/etc/btrbk/btrbk.conf"
-SNAP_SRC="/mnt/xlv_1/.btrbk.snap" # Change.this to the directory containing your backups
+# configuration
+{
+    CONF="/etc/btrbk/btrbk.conf"
+    CONFX="/@.x/asset/os.conf/conf.btrbk/etc/btrbk/xlvini.btrbk.conf"
+    [[ -f "${CONFX}" ]] && CONF="${CONFX}"
+    SYS_HOSTNAME="$(hostname)"
+    HOSTNAME="${SYS_HOSTNAME}"
+    SNAP_SRC="./.btrbk.snap"
+    SNAP_DEST=""
+
+    
+    # Arguments
+    declare -a EARG=()
+    
+    # Flags
+    cmdRestoreSig=0
+    DEST_OVERRIDDEN=0
+    SRC_OVERRIDDEN=0
+    DRY_RUN=0
+}
+
+_bbk() {
+    local LARG=()
+    LARG=("${@}")
+    HOSTNAME="${HOSTNAME:-_host}" envsubst < "$CONF" | btrbk -c /dev/stdin --exclude="${SYS_HOSTNAME}.local" "${LARG[@]}" "${EARG[@]}"
+    #echo "btrbk -c /dev/stdin --exclude="${SYS_HOSTNAME}.local" "${LARG[@]}" "${EARG[@]}"" >&2
+}
+
+_restore(){
+    # map data
+    declare -A SRC_INFO
+    declare -A TARGET_INFO
+    {
+        # 1. Extract Volumes (Skip row 1 header, print column 1)
+        mapfile -t VOLUME_INFO < <(_bbk list volume|awk 'NR>1 {print $1}'|sort -u)
+
+        # 2. Extract Sources (single multi-dimensional associative array)
+        SRC_INFO["_src_cnt"]=0 # count
+        while read -r source_subvol snap_path snap_name; do
+            SRC_INFO["${SRC_INFO["_src_cnt"]}"]="$snap_name"
+            SRC_INFO["${snap_name},source"]="$source_subvol"
+            SRC_INFO["${snap_name},path"]="$snap_path"
+            ((SRC_INFO["_src_cnt"]++))
+        done < <(_bbk list source | awk 'NR>1')
+
+        # 3. Extract Targets (single multi-dimensional associative array)
+        TARGET_INFO["_hosts_cnt"]=0 # host count
+        TARGET_INFO["_targets_cnt"]=0 # total targets count
+        while read -r target_host target_path; do
+            if [[ -z "${TARGET_INFO["${target_host},count"]}" ]]; then
+                TARGET_INFO["${TARGET_INFO["_hosts_cnt"]}"]="$target_host"
+                TARGET_INFO["${target_host},count"]=0
+                ((TARGET_INFO["_hosts_cnt"]++))
+            fi
+            local idx=${TARGET_INFO["${target_host},count"]}
+            TARGET_INFO["${target_host},${idx}"]="$target_path"
+            TARGET_INFO["${target_host},count"]=$((idx + 1))
+            ((TARGET_INFO["_targets_cnt"]++))
+        done < <(_bbk list target | awk 'NR>1')
+
+        # --- Verification ---
+        echo "=== Volumes (${#VOLUME_INFO[@]}) ==="
+        for i in "${!VOLUME_INFO[@]}"; do
+            echo "  [$((i+1))] ${VOLUME_INFO[$i]}"
+        done
+
+        echo "=== Sources (${SRC_INFO[_src_cnt]}) ==="
+        #declare -p SRC_INFO
+        for ((i=0; i<"${SRC_INFO["_src_cnt"]}"; i++)); do
+            local snap_name="${SRC_INFO["$i"]}"
+            echo "  [$((i+1))] ${SRC_INFO["${snap_name},source"]} -> ${snap_name}"
+        done
+
+        echo "=== Targets (${TARGET_INFO["_targets_cnt"]}) ==="
+        #declare -p TARGET_INFO
+        cnt=0
+        for ((i=0; i<${TARGET_INFO["_hosts_cnt"]}; i++)); do
+            local host="${TARGET_INFO["$i"]}"
+            local count="${TARGET_INFO["${host},count"]}"
+            for ((j=0; j<count; j++)); do
+                echo "  [$((++cnt))] ${host} : ${TARGET_INFO["${host},${j}"]}"
+            done
+        done
+        echo ""
+        exit
+    }
+
+    # --- Source Detection ---
+    local src_dir="${SNAP_SRC}"
+    if ! (( SRC_OVERRIDDEN )) && [[ ! -d "${src_dir}" && ${TARGET_INFO["_targets_cnt"]} -gt 0 ]]; then
+        # Find the first valid local target directory
+        for ((i=0; i<${TARGET_INFO["_hosts_cnt"]}; i++)); do
+            local host="${TARGET_INFO["$i"]}"
+            if [[ "${host}" == "-" ]]; then
+                local count="${TARGET_INFO["${host},count"]}"
+                for ((j=0; j<count; j++)); do
+                    local tpath="${TARGET_INFO["${host},${j}"]}"
+                    if [[ -d "${tpath}" ]]; then
+                        src_dir="${tpath}"
+                        break 2
+                    fi
+                done
+            fi
+        done
+    fi
+    
+    if [[ ! -d "${src_dir}" ]]; then
+        echo "Error: Source directory ${src_dir} does not exist. Please specify a valid source with -s."
+        exit 1
+    fi
+    
+    echo "Using source directory: ${src_dir}"
+    echo "---------------------------------------------------"
+    
+    for ((i=0; i<"${SRC_INFO["_src_cnt"]}"; i++)); do
+        local snap_name="${SRC_INFO["$i"]}"
+        local source_subvol="${SRC_INFO["${snap_name},source"]}"
+        echo "Processing snapshot: ${snap_name}"
+        
+        # Destination Resolution
+        local dest_path=""
+        local dest_parent=""
+        if (( DEST_OVERRIDDEN )); then
+            dest_path="${SNAP_DEST}/${snap_name}"
+            dest_parent="${SNAP_DEST}"
+        else
+            dest_path="${source_subvol}"
+            dest_parent=$(dirname "${dest_path}")
+        fi
+        
+        if [[ -d "${dest_path}" ]]; then
+            echo "  [SKIPPED] Destination already exists: ${dest_path}"
+            continue
+        fi
+        
+        # Determine volume root to bound parent creation
+        local vol_root=""
+        for vol in "${VOLUME_INFO[@]}"; do
+            if [[ "${dest_path}" == "${vol}/"* || "${dest_path}" == "${vol}" ]]; then
+                vol_root="${vol}"
+                break
+            fi
+        done
+        
+        if [[ -z "${vol_root}" && ! (( DEST_OVERRIDDEN )) ]]; then
+                echo "  [WARNING] Could not determine volume root for ${dest_path}"
+                vol_root="/"
+        fi
+        
+        # Smart Parent Directory Creation
+        if [[ ! -d "${dest_parent}" ]]; then
+            if (( DEST_OVERRIDDEN )); then
+                echo "  [MKDIR] Creating standard parent directory: ${dest_parent}"
+                if (( DRY_RUN )); then
+                    echo "  [DRY-RUN] mkdir -p \"${dest_parent}\""
+                else
+                    mkdir -p "${dest_parent}"
+                fi
+            else
+                echo "  [MKDIR] Creating parent hierarchy up to: ${dest_parent}"
+                local current_path="${vol_root}"
+                # Strip the vol_root from dest_parent to iterate sub-components
+                local rel_path="${dest_parent#${vol_root}}"
+                rel_path="${rel_path#/}" # remove leading slash
+                
+                IFS='/' read -ra path_parts <<< "${rel_path}"
+                local is_primary_parent=1
+                for part in "${path_parts[@]}"; do
+                    if [[ -z "${part}" ]]; then continue; fi
+                    current_path="${current_path}/${part}"
+                    if [[ ! -d "${current_path}" ]]; then
+                        if (( is_primary_parent )); then
+                            echo "    -> Creating primary parent as subvolume: ${current_path}"
+                            if (( DRY_RUN )); then
+                                echo "  [DRY-RUN] btrfs subvolume create \"${current_path}\""
+                            else
+                                btrfs subvolume create "${current_path}"
+                            fi
+                        else
+                            echo "    -> Creating nested directory: ${current_path}"
+                            if (( DRY_RUN )); then
+                                echo "  [DRY-RUN] mkdir \"${current_path}\""
+                            else
+                                mkdir "${current_path}"
+                            fi
+                        fi
+                    fi
+                    is_primary_parent=0
+                done
+            fi
+        fi
+        
+        local latest_backup
+        latest_backup=$(ls -1d "${src_dir}/${snap_name}."* 2>/dev/null | sort -V | tail -n 1)
+        
+        if [[ -z "${latest_backup}" ]]; then
+            echo "  [SKIPPED] No backup found for '${snap_name}' in ${src_dir}"
+            continue
+        fi
+        
+        echo "  [FOUND] Latest backup: ${latest_backup}"
+        
+        # Operation Logic (Optimized using case)
+        if [[ -f "${latest_backup}" ]]; then
+            case "${latest_backup}" in
+                *.raw)
+                    echo "  [RESTORE] Restoring raw stream to ${dest_parent} ..."
+                    if (( DRY_RUN )); then
+                        echo "  [DRY-RUN] btrfs receive \"${dest_parent}\" < \"${latest_backup}\""
+                    else
+                        btrfs receive "${dest_parent}" < "${latest_backup}"
+                    fi
+                    ;;
+                *.raw.gz)
+                    echo "  [RESTORE] Restoring gz compressed stream to ${dest_parent} ..."
+                    if (( DRY_RUN )); then
+                        echo "  [DRY-RUN] gzip -dc \"${latest_backup}\" | btrfs receive \"${dest_parent}\""
+                    else
+                        gzip -dc "${latest_backup}" | btrfs receive "${dest_parent}"
+                    fi
+                    ;;
+                *.raw.xz)
+                    echo "  [RESTORE] Restoring xz compressed stream to ${dest_parent} ..."
+                    if (( DRY_RUN )); then
+                        echo "  [DRY-RUN] xz -dc \"${latest_backup}\" | btrfs receive \"${dest_parent}\""
+                    else
+                        xz -dc "${latest_backup}" | btrfs receive "${dest_parent}"
+                    fi
+                    ;;
+                *.raw.zst)
+                    echo "  [RESTORE] Restoring zst compressed stream to ${dest_parent} ..."
+                    if (( DRY_RUN )); then
+                        echo "  [DRY-RUN] zstd -dc \"${latest_backup}\" | btrfs receive \"${dest_parent}\""
+                    else
+                        zstd -dc "${latest_backup}" | btrfs receive "${dest_parent}"
+                    fi
+                    ;;
+                *)
+                    echo "  [ERROR] Unknown backup file format for ${latest_backup}"
+                    continue
+                    ;;
+            esac
+            # btrfs receive creates the subvolume with the name of the backup stream (e.g. snap_name.timestamp)
+            local stream_name
+            stream_name=$(basename "${latest_backup}")
+            stream_name="${stream_name%.raw*}" # stripping extensions if any
+            if [[ -d "${dest_parent}/${stream_name}" || (( DRY_RUN )) ]] && [[ "${dest_parent}/${stream_name}" != "${dest_path}" ]]; then
+                echo "  [RENAME] Renaming received subvolume to $(basename "${dest_path}")..."
+                if (( DRY_RUN )); then
+                    echo "  [DRY-RUN] mv \"${dest_parent}/${stream_name}\" \"${dest_path}\""
+                else
+                    mv "${dest_parent}/${stream_name}" "${dest_path}"
+                fi
+            fi
+        elif [[ -d "${latest_backup}" ]]; then
+            # It's a standard subvolume backup
+            local src_dev dest_dev
+            src_dev=$(stat -c %d "${latest_backup}")
+            if [[ -d "${dest_parent}" ]]; then
+                dest_dev=$(stat -c %d "${dest_parent}")
+            else
+                dest_dev=$(stat -c %d "${vol_root:-/}")
+            fi
+            
+            if [[ "${src_dev}" == "${dest_dev}" ]]; then
+                echo "  [RESTORE] Same volume detected. Using snapshot to ${dest_path}..."
+                if (( DRY_RUN )); then
+                    echo "  [DRY-RUN] btrfs subvolume snapshot \"${latest_backup}\" \"${dest_path}\""
+                else
+                    btrfs subvolume snapshot "${latest_backup}" "${dest_path}"
+                fi
+            else
+                echo "  [RESTORE] Cross-volume detected. Using send/receive to ${dest_parent}..."
+                if (( DRY_RUN )); then
+                    echo "  [DRY-RUN] btrfs send \"${latest_backup}\" | btrfs receive \"${dest_parent}\""
+                else
+                    btrfs send "${latest_backup}" | btrfs receive "${dest_parent}"
+                fi
+                
+                local stream_name
+                stream_name=$(basename "${latest_backup}")
+                if [[ -d "${dest_parent}/${stream_name}" || (( DRY_RUN )) ]] && [[ "${dest_parent}/${stream_name}" != "${dest_path}" ]]; then
+                    echo "  [RENAME] Renaming received subvolume to $(basename "${dest_path}")..."
+                    if (( DRY_RUN )); then
+                        echo "  [DRY-RUN] mv \"${dest_parent}/${stream_name}\" \"${dest_path}\""
+                    else
+                        mv "${dest_parent}/${stream_name}" "${dest_path}"
+                    fi
+                fi
+            fi
+        else
+            echo "  [ERROR] Backup format unrecognized: ${latest_backup}"
+        fi
+        echo "---------------------------------------------------"
+    done
+    
+    echo ">>> All possible restores processed."
+
+    exit 0
+}
 
 usage() {
-    cat <<-EOF
-    Usage: $(basename $0) [options]
+    (($usage_skip)) && { EARG+=("$1");return; }
+    cat <<EOF
+usage: $(basename $0 ) [<options>] <command> [[--] <filter>...]
 
-    Options:
-    -c, --conf <file>         define path to btrbk.conf (default: /etc/btrbk/btrbk.conf)
-    -s, --snap-src <dir>      define directory holding backups (default: /mnt/xlv_1/.btrbk.snap)
-    -d, --snap-dest <dir>     define destination where snapshots will be restored (default: ./)
-    -h, --help                display this help message
+options:
+   -s, --snap-src            source directory of snapshots ${SNAP_SRC:+(current: ${SNAP_SRC})}
+   -d, --snap-dest           destination directory for restore ${SNAP_DEST:+(current: ${SNAP_DEST})}
+   -H, --hostname            hostname ${HOSTNAME:+(current: ${HOSTNAME})}
+   -N, --sysname             system name ${SYS_HOSTNAME:+(current: ${SYS_HOSTNAME})}
+   -n, --dry-run             do not perform any changes 
+commands:
+    restore                   restore a volume
+
+Any unhandled arguments are passed directly to 'btrbk'.
+
+$(btrbk --help)
 EOF
 }
 
+usage_skip=0
+# parse args
 while [[ $# -gt 0 ]]; do
     case $1 in
-    -c|--conf|conf)
-        CONF="${2}"
-        ;;
-    -s|--snap-src|snap-src)
-        SNAP_SRC="${2}"
-        ;;
-    -d|--snap-dest|snap-dest)
-        SNAP_DEST="${2}"
-        ;;
-    -h|help)
-        usage
-        exit 0
-        ;;
+    -H|--hostname)      HOSTNAME="${2}";        shift ;;
+    -N|--sysname)       SYS_HOSTNAME="${2}";    shift ;;
+    -c|--config)        CONF="${2}";            shift ;;
+    -s|--snap-src)      SNAP_SRC="${2}";        SRC_OVERRIDDEN=1; shift ;;
+    -d|--snap-dest)     SNAP_DEST="${2}";       DEST_OVERRIDDEN=1; shift ;;
+    -n|--dry-run)       DRY_RUN=1; EARG+=("-n"); shift ;;
+    restore)            cmdRestoreSig=1; usage_skip=1;;
+    -h | --help)        usage; exit 0;;
+    -*)                 EARG+=("$1");;
+    *)                  EARG+=("$1"); usage_skip=1;;
     esac
     shift
 done
 
-scriptPath="$(readlink -f ${BASH_SOURCE[0]:-$0})"
-scriptDir="$(dirname "${scriptPath}")"
-scriptName=${0##*/}
-source "${scriptDir}/libxlvini"
-
-if [[ ! -f "$CONF" ]]; then
-    serr "config file `$CONF` not found."
-    exit 1
-fi
-
-declare -A bkp_map
-current_subvol=""
-
-sinf "parsing `$CONF`"
-
-# 1. Parse btrbk.conf and build the map dynamically
-while read -r line || [[ -n "$line" ]]; do
-    # Trim leading whitespace
-    line="${line#"${line%%[![:space:]]*}"}"
-    
-    # Skip comments and empty lines
-    [[ -z "$line" || "$line" == \#* ]] && continue
-    
-    # Split the line by spaces/tabs
-    read -a tokens <<< "$line"
-    key="${tokens[0]}"
-    val="${tokens[1]}"
-    
-    if [[ "$key" == "subvolume" ]]; then
-        current_subvol="$val"
-        # Set default mapping to itself in case no explicit 'snapshot_name' is provided
-        bkp_map["$current_subvol"]="$current_subvol"
-    elif [[ "$key" == "snapshot_name" && -n "$current_subvol" ]]; then
-        # Update mapping if a specific snapshot_name block is found
-        bkp_map["$current_subvol"]="$val"
-    fi
-done < "$CONF"
-
-
-# 2. Iterate through the generated map and perform restores
-echo "[*] Starting restore process in $(pwd)..."
-
-for subvol in "${!bkp_map[@]}"; do
-    snap_name="${bkp_map[$subvol]}"
-    
-    # Find the latest snapshot based on btrbk's timestamp format (sort correctly puts newest at bottom)
-    latest_snap=$(find "$SNAP_SRC" -maxdepth 1 -type d -name "${snap_name}.*" | sort | tail -n 1)
-    
-    if [[ -z "$latest_snap" ]]; then
-        echo "[-] No backup found for $subvol (expected prefix: $snap_name)"
-        continue
-    fi
-    
-    echo "[+] Found latest backup for $subvol: $(basename "$latest_snap")"
-    
-    # Safely create parent directories if destination includes slashes (e.g., @bkp/@os.root/debian)
-    dest_dir="$(dirname "./$subvol")"
-    if [[ "$dest_dir" != "." ]]; then
-        mkdir -p "$dest_dir"
-    fi
-    
-    # Prevent overwriting if destination subvolume already exists
-    if [[ -e "./$subvol" ]]; then
-        echo "    -> Destination ./$subvol already exists, skipping."
-        continue
-    fi
-
-    # Execute the restoration 
-    echo "    -> Restoring to ./$subvol"
-    
-    # Uncomment the following line to actually execute the btrfs command safely!
-    # sudo btrfs subvolume snapshot "$latest_snap" "./$subvol"
-    
-done
-
-echo "[*] Done."
+((cmdRestoreSig)) && _restore
+_bbk
