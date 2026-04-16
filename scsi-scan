@@ -1,5 +1,3 @@
 #!/usr/bin/env bash
 
-for host in /sys/class/scsi_host/host*; do
-    echo "- - -" >"$host/scan"
-done
+echo "- - -" | tee /sys/class/scsi_host/host*/scan > /dev/null

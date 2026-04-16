@@ -15,7 +15,14 @@ _git_push() {
     fi
 }
 
-_git_checkout_tag() {
+gitAddSafeDir() {
+    local dir="${1:-$gitDir}"
+    if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$dir"; then
+        git config --global --add safe.directory "$dir"
+    fi
+}
+
+git_checkout_tag() {
     scope=Git-checkout
     checkout_tag="${1:-$gitTag}"
     checkout_tag="${checkout_tag:-$(git tag | fzf)}"
@@ -23,7 +30,7 @@ _git_checkout_tag() {
     git checkout "${checkout_tag}"
 }
 
-_git_sync() {
+git_sync() {
     scope=git-sync
 
     gitMsg="sync-${gitMsg}"
@@ -54,7 +61,7 @@ _git_sync() {
     fi
 }
 
-_git_scan_repo() {
+git_scan_repo() {
     local base="${1:-.}"
     local max_depth="${2:-5}"
     local count=1
@@ -178,7 +185,7 @@ gitMsgMeta="$(hostname)-$(date '+%Y-%m-%d-%a')"
 gitMsg="${gitMsg:+$gitMsgMeta $gitMsg}"
 gitMsg="${gitMsg:-$gitMsgMeta:$(date '+%H%M%S')}"
 
-[ ${gitAddSafeDirSig:-0} -eq 1 ] && git config --global --add safe.directory "${gitDir}"
-[ ${gitListRepoSig:-0} -eq 1 ] && _git_scan_repo "${gitDir:-$PWD}" "${gitDepth:-4}" || :
-[ ${gitCheckoutTagSig:-0} -eq 1 ] && _git_checkout_tag || :
-[ ${gitSyncSig:-0} -eq 1 ] && _git_sync || :
+[ ${gitAddSafeDirSig:-0} -eq 1 ] && gitAddSafeDir "$gitDir"
+[ ${gitListRepoSig:-0} -eq 1 ] && git_scan_repo "${gitDir:-$PWD}" "${gitDepth:-4}" || :
+[ ${gitCheckoutTagSig:-0} -eq 1 ] && git_checkout_tag || :
+[ ${gitSyncSig:-0} -eq 1 ] && git_sync || :

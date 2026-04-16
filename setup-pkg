@@ -36,6 +36,7 @@ pkg_user=(
     git
     fzf
     glow
+    tree
     ranger
     tmux
 

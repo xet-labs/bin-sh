@@ -9,17 +9,17 @@ elif [ -d "/root/x" ]; then
     baseSrc="/root/x"
 fi
 
-if [ -d "/x-obs/-rish/@.xet/dox/" ]; then
-    doxSrc="/x-obs/-rish/@.xet/dox"
-elif [ -d "$HOME/x-obs/-rish/@.xet/dox/" ]; then
-    doxSrc="$HOME/x-obs/-rish/@.xet/dox"
+if [ -d "/x-obs/@rish/@.xet/dox/" ]; then
+    doxSrc="/x-obs/@rish/@.xet/dox"
+elif [ -d "$HOME/x-obs/@rish/@.xet/dox/" ]; then
+    doxSrc="$HOME/x-obs/@rish/@.xet/dox"
 elif [ -d "${baseSrc}/local/dox/" ]; then
     doxSrc="${baseSrc}/local/dox"
 fi
 
 # Define default directories
-def_baseDir="${baseSrc}/asset"
-def_otherDirs=("${baseSrc}/res" "$doxSrc")
+def_baseDir="$doxSrc"
+def_otherDirs=("${baseSrc}/asset" "${baseSrc}/local")
 baseDir="${def_baseDir}"
 otherDirs=("${def_otherDirs[@]}")
 
@@ -183,8 +183,6 @@ else
 fi
 }
 
-# Chang dir so that the fil path given by find doesnt include parent path
-cd "${baseDir}" || err "Failed to access basedir '${baseDir}'"
 
 #- export fn's for fzf preview
 export -f inf msg smsg wrn alrt out opr
@@ -201,7 +199,10 @@ if (( ${#validDirs[@]} == 0 )); then
     exit 1
 fi
 
-file="$(find "${validDirs[@]}" -name '.git*' -prune -o -type f -print | (
+# Chang dir so that the fil path given by find doesnt include parent path
+cd "$(dirname "${baseDir}")" || otherDirs=("${otherDirs[@]}" "${baseDir}")
+
+file="$(find "$(basename "${baseDir}")" "${validDirs[@]}" -name '.git*' -prune -o -type f -print | (
     if (( gistSig )); then
         fzf --ansi --query="${searchString}" --preview 'bash -c "opr {}"' $fzf_param
     elif (( showSig )); then

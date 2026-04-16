@@ -8,13 +8,13 @@ source "${scriptDir}/libxlvini"
 
 arg="$@"
 scriptDir="$(dirname $(readlink -f "${BASH_SOURCE[0]}"))"
-export GNIREHTET_APK="${scriptDir}/../../app.res/gnirehtet/gnirehtet.apk"
+export GNIREHTET_APK="${scriptDir}/../../share/gnirehtet/gnirehtet.apk"
 
 case $1 in
 java)
     shift
     sinf "java"
-    java -jar "${scriptDir}/../../app.res/gnirehtet/gnirehtet.jar" "${@}"
+    java -jar "${scriptDir}/../../share/gnirehtet/gnirehtet.jar" "${@}"
     ;;
 *)
     sinf "rust"
