@@ -5,14 +5,12 @@ if [ -d "/x" ]; then
     baseSrc="/x"
 elif [ -d "$HOME/x" ]; then
     baseSrc="$HOME/x"
-elif [ -d "/root/x" ]; then
-    baseSrc="/root/x"
 fi
 
-if [ -d "/x.obs/@rish/@.xet/" ]; then
-    doxSrc="/x.obs/@rish/@.xet"
-elif [ -d "$HOME/x.obs/@rish/@.xet/" ]; then
-    doxSrc="$HOME/x.obs/@rish/@.xet"
+if [ -d "/x.obs/@.xet/" ]; then
+    doxSrc="/x.obs/@.xet"
+elif [ -d "$HOME/x.obs/@.xet/" ]; then
+    doxSrc="$HOME/x.obs/@.xet"
 elif [ -d "${baseSrc}/local/dox/" ]; then
     doxSrc="${baseSrc}/local/dox"
 fi

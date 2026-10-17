@@ -1,0 +1,365 @@
+#!/usr/bin/env bash
+# btrbkx — drop-in btrbk wrapper with restore support
+# Usage: btrbkx [<options>] <command> [[--] <filter>...]
+#        btrbkx [<options>] restore [--] [<filter>...]
+#
+# All non-restore commands/flags pass through to btrbk verbatim.
+# Restore-specific flags are stripped before the pass-through.
+
+set -euo pipefail
+
+# ── config ─────────────────────────────────────────────────────────────────────
+
+CONF=""
+for _c in \
+    "/mnt/@datx/@.xlvini/asset/os.conf/app.btrbk/etc/btrbk/xlvini.btrbk.conf" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/btrbk/btrbk.conf" \
+    "/etc/btrbk/btrbk.conf"; do
+    [[ -f "$_c" ]] && { CONF="$_c"; break; }
+done
+[[ -z "$CONF" ]] && { echo "btrbkx: no config file found" >&2; exit 1; }
+
+HOSTNAME="$(hostname)"
+SYS_FQDN="$(hostname -f 2>/dev/null || hostname)"
+
+# ── runtime state ──────────────────────────────────────────────────────────────
+
+SNAP_SRC=""                 # restore source dir (auto-detected if empty)
+SNAP_DEST=""                # restore dest  dir (auto-detected if empty)
+DRY_RUN=0
+EXCLUDE_SELF=1              # auto-exclude local FQDN from btrbk targets
+CMD=""                      # custom command (restore, …); empty → btrbk pass-through
+
+declare -a BTRBK_ARGS=()          # pass-through args
+declare -a RESTORE_FILTERS=()     # glob patterns for snapshot name matching
+declare -a EXCLUDE_ARGS=()        # --exclude values (also forwarded to btrbk)
+
+# decompressor lookup: stream suffix → command
+declare -A _DECOMP=(
+    [raw]="cat"  [raw.gz]="gzip -dc"
+    [raw.xz]="xz -dc"  [raw.zst]="zstd -dc"
+)
+
+scriptPath="$(readlink -f "${BASH_SOURCE[0]:-$0}")"
+scriptDir="$(dirname "$scriptPath")"
+scriptName=${0##*/}
+# import helper/logging lib, exit if unavailable
+source "${scriptDir}/libxlvini" || {
+    echo "'libxlvini' not found in $scriptDir; please ensure it exists for proper msg display"
+}
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+_die()  { echo "btrbkx: error: $*" >&2; exit 1; }
+_warn() { echo "btrbkx: warn:  $*" >&2; }
+_info() { echo "btrbkx: $*"; }
+_sep()  { echo "───────────────────────────────────────────────────────────────"; }
+
+# Dry-run aware command runner.
+_run() {
+    if (( DRY_RUN )); then _info "  [DRY]   $*"
+    else "$@"; fi
+}
+
+# Dry-run aware pipeline runner (can't pass pipes through _run).
+# Usage: _run_pipe "description" cmd1_string cmd2_string
+_run_pipe() {
+    local desc="$1" lhs="$2" rhs="$3"
+    _info "  [RESTORE] $desc"
+    if (( DRY_RUN )); then _info "  [DRY]   $lhs | $rhs"
+    else eval "$lhs" | eval "$rhs"; fi
+}
+
+# Rename a received subvolume if its path differs from the target.
+_rename_if_needed() {
+    local received="$1" target="$2"
+    [[ "$received" == "$target" ]] && return 0
+    _info "  [RENAME] $received → $target"
+    _run mv "$received" "$target"
+}
+
+# Return first existing directory from args, or empty string.
+_first_existing_dir() {
+    for d in "$@"; do [[ -d "$d" ]] && { printf '%s' "$d"; return; }; done
+}
+
+# ── btrbk interface ────────────────────────────────────────────────────────────
+
+# Rendered config is cached to avoid repeated envsubst calls.
+_RENDERED_CONF=""
+_get_conf() {
+    [[ -z "$_RENDERED_CONF" ]] && \
+        _RENDERED_CONF="$(HOSTNAME="${HOSTNAME:-_host}" envsubst < "$CONF")"
+    printf '%s' "$_RENDERED_CONF"
+}
+
+# Run btrbk with cached config; optionally excludes local FQDN.
+_bbk() {
+    local -a _self_exc=()
+    (( EXCLUDE_SELF )) && _self_exc=(--exclude="${SYS_FQDN}")
+    btrbk -c /dev/stdin \
+        "${_self_exc[@]+"${_self_exc[@]}"}" \
+        "${EXCLUDE_ARGS[@]+"${EXCLUDE_ARGS[@]}"}" \
+        "$@"  <<< "$(_get_conf)"
+}
+
+# Parse a btrbk --format=raw line into an associative array (nameref).
+# btrbk raw format: key="value" key2="value2" …
+_parse_kv() {
+    local line="$1"; local -n _out="$2"; _out=()
+    while [[ "$line" =~ ^([a-z_]+)=([\"\'])([^\"\']*)[\"\'](.*) ]]; do
+        _out["${BASH_REMATCH[1]}"]="${BASH_REMATCH[3]}"
+        line="${BASH_REMATCH[4]# }"
+    done
+}
+
+# Iterate btrbk list <type> --format=raw, call callback with parsed kv array.
+# Usage: _bbk_each <list-type> <callback>
+#   callback receives a nameref "_kv" associative array for each line.
+_bbk_each() {
+    local type="$1" callback="$2"
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local -A _kv=(); _parse_kv "$line" _kv
+        "$callback"
+    done < <(_bbk list "$type" --format=raw)
+}
+
+# ── glob filter ────────────────────────────────────────────────────────────────
+
+_matches_filters() {
+    local name="$1"
+    (( ${#RESTORE_FILTERS[@]} == 0 )) && return 0
+    for f in "${RESTORE_FILTERS[@]}"; do
+        # shellcheck disable=SC2254
+        case "$name" in $f) return 0 ;; esac
+    done
+    return 1
+}
+
+# ── restore ────────────────────────────────────────────────────────────────────
+
+_restore_do() {
+    _info "Reading btrbk config…"
+    inf "conf: $CONF"
+
+    # ── 1. gather volumes / sources / targets ────────────────────────────────
+
+    declare -a VOLUMES=() SRC_NAMES=() LOCAL_TARGETS=()
+    declare -A SRC_PATH=() SRC_SNAPDIR=()
+    declare -A _VOLS_SEEN=()
+
+    _cb_vol() {
+        local p="${_kv[volume_path]:-}"
+        [[ -z "$p" ]] && return 0
+        [[ -v _VOLS_SEEN["$p"] ]] && return 0
+        _VOLS_SEEN["$p"]=1
+        VOLUMES+=("$p")
+    }
+    _cb_source() {
+        local n="${_kv[snapshot_name]:-}"
+        [[ -z "$n" ]] && return 0
+        SRC_NAMES+=("$n")
+        SRC_PATH["$n"]="${_kv[source_subvolume]:-}"
+        SRC_SNAPDIR["$n"]="${_kv[snapshot_path]:-}"
+    }
+    _cb_target() {
+        [[ -n "${_kv[target_host]:-}" ]] && return 0
+        [[ -z "${_kv[target_path]:-}" ]] && return 0
+        LOCAL_TARGETS+=("${_kv[target_path]}")
+    }
+
+    _bbk_each volume _cb_vol      # populates VOLUMES
+    _bbk_each source _cb_source   # populates SRC_NAMES, SRC_PATH, SRC_SNAPDIR
+    _bbk_each target _cb_target   # populates LOCAL_TARGETS
+    
+    # ── 2. summary display ───────────────────────────────────────────────────
+
+    _sep; printf "Volumes (%d):\n" "${#VOLUMES[@]}"
+    printf "  %s\n" "${VOLUMES[@]}"
+
+    _sep; printf "Sources (%d):\n" "${#SRC_NAMES[@]}"
+    for n in "${SRC_NAMES[@]}"; do printf "  %-30s  ←  %s\n" "$n" "${SRC_PATH[$n]}"; done
+
+    _sep; printf "Local targets (%d):\n" "${#LOCAL_TARGETS[@]}"
+    printf "  %s\n" "${LOCAL_TARGETS[@]}"
+    _sep; echo ""
+
+    # ── 3. resolve source dir ────────────────────────────────────────────────
+    local default_snap_dir="$SNAP_SRC"
+    if [[ -z "$default_snap_dir" ]]; then
+        default_snap_dir="$(_first_existing_dir "${LOCAL_TARGETS[@]+"${LOCAL_TARGETS[@]}"}")"
+    fi
+    [[ -z "$default_snap_dir" ]] && _die "cannot determine snapshot source dir; use -s <dir>"
+
+
+    # ── 4. per-source restore loop ───────────────────────────────────────────
+
+    local restored=0 skipped=0 failed=0
+
+    for snap_name in "${SRC_NAMES[@]}"; do
+        _matches_filters "$snap_name" || continue
+
+        local source_subvol="${SRC_PATH[$snap_name]}" vol_root="/"
+        _sep
+        _info "Processing: $snap_name  (source: $source_subvol)"
+
+        # ── destination path ─────────────────────────────────────────────────
+        local dest_path dest_parent
+        if [[ -n "$SNAP_DEST" ]]; then
+            dest_path="${SNAP_DEST}/${snap_name}"; dest_parent="$SNAP_DEST"
+        else
+            dest_path="$source_subvol"; dest_parent="$(dirname "$dest_path")"
+        fi
+
+        if [[ -d "$dest_path" ]]; then
+            _info "  [SKIP] destination already exists: $dest_path"
+            (( skipped++ )) || true; continue
+        fi
+
+        # ── find latest backup ───────────────────────────────────────────────
+        local latest_backup
+        latest_backup="$(printf '%s\n' "${src_dir}/${snap_name}."* 2>/dev/null | sort -rV | head -n1)"
+        [[ "$latest_backup" == *'*' ]] && latest_backup=""
+
+        if [[ -z "$latest_backup" ]]; then
+            _warn "  [SKIP] no backup found for '$snap_name' in $src_dir"
+            (( skipped++ )) || true; continue
+        fi
+        _info "  [FOUND] $latest_backup"
+
+        # ── parent dir creation (all ancestors as subvolumes) ────────────────
+        if [[ ! -d "$dest_parent" ]]; then
+            if [[ -n "$SNAP_DEST" ]]; then
+                _info "  [MKDIR] $dest_parent"
+                _run mkdir -p "$dest_parent"
+            else
+                _info "  [SUBVOL] building parent tree up to: $dest_parent"
+                for v in "${VOLUMES[@]}"; do
+                    [[ "$dest_path" == "${v}/"* || "$dest_path" == "$v" ]] && { vol_root="$v"; break; }
+                done
+                local cur="$vol_root" rel="${dest_parent#"$vol_root"}"
+                rel="${rel#/}"
+                IFS='/' read -ra parts <<< "$rel"
+                for part in "${parts[@]}"; do
+                    [[ -z "$part" ]] && continue
+                    cur="${cur}/${part}"
+                    [[ -d "$cur" ]] && continue
+                    _info "    → btrfs subvolume create \"$cur\""
+                    _run btrfs subvolume create "$cur"
+                done
+            fi
+        fi
+
+        # ── actual restore ───────────────────────────────────────────────────
+        if [[ -f "$latest_backup" ]]; then
+            # stream file — resolve decompressor
+            local decomp=""
+            for sfx in "${!_DECOMP[@]}"; do
+                [[ "$latest_backup" == *".${sfx}" ]] && { decomp="${_DECOMP[$sfx]}"; break; }
+            done
+            [[ -z "$decomp" ]] && { _warn "  [FAIL] unknown stream format: $latest_backup"
+                (( failed++ )) || true; continue; }
+
+            _run_pipe "stream → btrfs receive \"$dest_parent\"" \
+                "$decomp \"$latest_backup\"" \
+                "btrfs receive \"$dest_parent\"" \
+                || { _warn "  [FAIL] btrfs receive failed"; (( failed++ )) || true; continue; }
+
+            local rname="${latest_backup##*/}"; rname="${rname%.raw*}"
+            _rename_if_needed "${dest_parent}/${rname}" "$dest_path"
+
+        elif [[ -d "$latest_backup" ]]; then
+            local src_dev dest_dev
+            src_dev="$(stat -c %d "$latest_backup")"
+            dest_dev="$(stat -c %d "$dest_parent" 2>/dev/null || stat -c %d "${vol_root:-/}")"
+
+            if [[ "$src_dev" == "$dest_dev" ]]; then
+                _info "  [RESTORE] btrfs snapshot (same volume)"
+                _run btrfs subvolume snapshot "$latest_backup" "$dest_path" \
+                    || { _warn "  [FAIL] snapshot failed"; (( failed++ )) || true; continue; }
+            else
+                _run_pipe "btrfs send/receive (cross-volume)" \
+                    "btrfs send \"$latest_backup\"" \
+                    "btrfs receive \"$dest_parent\"" \
+                    || { _warn "  [FAIL] send/receive failed"; (( failed++ )) || true; continue; }
+
+                _rename_if_needed "${dest_parent}/${latest_backup##*/}" "$dest_path"
+            fi
+        else
+            _warn "  [FAIL] unrecognized backup at: $latest_backup"
+            (( failed++ )) || true; continue
+        fi
+
+        (( restored++ )) || true
+    done
+
+    _sep
+    printf "Done — restored: %d  skipped: %d  failed: %d\n" "$restored" "$skipped" "$failed"
+    (( failed == 0 ))
+}
+
+# ── usage ──────────────────────────────────────────────────────────────────────
+
+_usage() {
+    cat <<EOF
+btrbkx — drop-in btrbk wrapper with restore support
+
+Usage:
+  btrbkx [<options>] restore [--] [<snap-name-glob>...]
+  btrbkx [<btrbk-options>] <btrbk-command> [[--] <filter>...]
+
+Restore options:
+  -s, --snap-src <dir>    source directory containing backup snapshots
+                          (auto-detected from config if omitted)
+  -d, --snap-dest <dir>   destination prefix for restored subvolumes
+                          (defaults to original source path from config)
+  -n, --dry-run           show what would be done, make no changes
+  -H, --hostname <name>   HOSTNAME for config envsubst  (default: $(hostname))
+  -N, --sysname  <name>   FQDN used for self-exclusion  (default: $(hostname -f 2>/dev/null || hostname))
+  --no-exclude-self       do not auto-exclude local FQDN from btrbk targets
+  -c, --config   <file>   btrbk config file             (default: $CONF)
+  --exclude <filter>      passed to btrbk (can be repeated)
+  -h, --help              this help, then btrbk --help
+
+Filter args after -- are matched as glob patterns against snapshot names.
+All other arguments are forwarded verbatim to btrbk.
+
+$(btrbk --help 2>/dev/null || true)
+EOF
+}
+
+# ── arg parsing ────────────────────────────────────────────────────────────────
+
+_after_doubledash=0
+
+while [[ $# -gt 0 ]]; do
+    if (( _after_doubledash )); then
+        RESTORE_FILTERS+=("$1"); BTRBK_ARGS+=("$1")
+        shift; continue
+    fi
+    case "$1" in
+        --)          _after_doubledash=1; BTRBK_ARGS+=("$1") ;;
+        -h|--help)   _usage; exit 0 ;;
+        -c|--config)   CONF="${2:?--config requires an argument}"; shift ;;
+        -H|--hostname) HOSTNAME="${2:?--hostname requires an argument}"; shift ;;
+        -N|--sysname)  SYS_FQDN="${2:?--sysname requires an argument}"; shift ;;
+        --no-exclude-self) EXCLUDE_SELF=0 ;;
+        -s|--snap-src)  SNAP_SRC="${2:?--snap-src requires an argument}"; shift ;;
+        -d|--snap-dest) SNAP_DEST="${2:?--snap-dest requires an argument}"; shift ;;
+        -n|--dry-run)  DRY_RUN=1; BTRBK_ARGS+=("$1") ;;
+        --exclude)     EXCLUDE_ARGS+=(--exclude "${2:?--exclude requires an argument}")
+                       BTRBK_ARGS+=(--exclude "$2"); shift ;;
+        restore)       CMD="restore" ;;
+        *)             BTRBK_ARGS+=("$1") ;;
+    esac
+    shift
+done
+
+# ── dispatch ───────────────────────────────────────────────────────────────────
+
+case "$CMD" in
+    restore)  _restore_do ;;
+    # ↓ add future commands here ↓
+    "")       _bbk "${BTRBK_ARGS[@]+"${BTRBK_ARGS[@]}"}" ;;
+    *)        _die "unknown command: $CMD" ;;
+esac

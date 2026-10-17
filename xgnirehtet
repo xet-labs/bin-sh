@@ -17,6 +17,7 @@ java)
     java -jar "${jar_src}" "${@}"
     ;;
 *)
+    export GNIREHTET_APK="$(dirname $(realpath $(xbin -r gnirehtet)))/gnirehtet.apk"
     sinf "rust"
     xbin gnirehtet "${@}"
     ;;

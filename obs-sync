@@ -36,4 +36,8 @@ else
     exit 1
 fi
 
+GIT_AUTHOR_NAME="obs.$(hostname)" \
+GIT_AUTHOR_EMAIL="obs@$(hostname --fqdn)" \
+GIT_COMMITTER_NAME="obs.$(hostname)" \
+GIT_COMMITTER_EMAIL="obs@$(hostname --fqdn)" \
 $scriptDir/gitx sync --safe-dir -c -b main

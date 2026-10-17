@@ -79,12 +79,15 @@ pkg_ops_cli=(
     prometheus-node-exporter
 )
 pkg_firmware=(
-    intel-microcode
-    amd64-microcode
-    firmware-linux-nonfree
-    firmware-misc-nonfree
-    firmware-realtek
-    firmware-iwlwifi
+    # CPU Microcodes
+    intel-microcode amd64-microcode
+
+    # General Firmware Meta-Packages
+    firmware-linux firmware-linux-nonfree firmware-misc-nonfree
+
+    # Networking
+    firmware-iwlwifi firmware-realtek firmware-atheros firmware-brcm80211
+
     dbus-x11
 )
 pkg_user_gui=(

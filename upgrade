@@ -35,12 +35,18 @@ distUpgrade() {
     distUpgradeSub() {
         echo ""
         sinf "Upgrading distro.."
-        DEBIAN_FRONTEND=noninteractive apt dist-upgrade $aptEarg && apt install -y linux-headers-$(uname -r) && { [ "$cleanSig" -ne 1 ] && clean || return 0; }
+        DEBIAN_FRONTEND=noninteractive apt dist-upgrade $aptEarg && { [ "$cleanSig" -ne 1 ] && clean || return 0; }
     }
     salrt "Perfoming system wide upgrade.."
     fetchUpdate &&
         (distUpgradeSub || (fixpkg && distUpgradeSub))
     fixBootLink
+}
+
+inst_headers() {
+    echo ""
+    sinf "Installing headers.."
+    (apt-cache show linux-headers-$(dpkg --print-architecture) 2>/dev/null && apt install -y linux-headers-$(dpkg --print-architecture) 2>/dev/null)
 }
 
 fixpkg() {
@@ -50,20 +56,21 @@ fixpkg() {
     sinf "Repairing any broken packages.."
     dpkg --configure -a $dpkgEarg
     apt --fix-missing --fix-broken install $aptEarg
-    (apt-cache show linux-headers-$(uname -r) 2>/dev/null &&
-        apt install -y linux-headers-$(uname -r) 2>/dev/null)
 }
+
 
 clean() {
     local scope="${scriptName}-clean"
 
-    if [[ $1 == 2 ]]; then
+    if [[ $1 -ge 2 ]]; then
         echo ""
         sinf "Removing cache.."
+        # completely empties the local repository of retrieved package files
         apt clean -y
     else
         echo ""
         sinf "Removing outdated cache.."
+        # only deletes package files that can no longer be downloaded
         apt autoclean -y
     fi
 
@@ -75,12 +82,13 @@ fixBootLink() {
 
     # Define the fixBoot function
     fixBoot() {
+        bootDir="$1"
+        cd "${bootDir}" || { wrn "" "Couldnt cd "${bootDir}".."; return 1; }
         echo ""
         sinf "Creating link to latest 'initrd.img, vmlinuz' in '/boot'.."
-        bootDir="$1"
-        cd ${bootDir} || exit
-        ln -svf "$(basename "$(ls -t "$bootDir"/initrd.img-* | head -n1)")" initrd.img
-        ln -svf "$(basename "$(ls -t "$bootDir"/vmlinuz-* | head -n1)")" vmlinuz
+        # sort by version "ls -v" then catch last result "tail -n1"
+        ln -svf "$(basename "$(ls -v "$bootDir"/initrd.img-* | tail -n1)")" initrd.img
+        ln -svf "$(basename "$(ls -v "$bootDir"/vmlinuz-* | tail -n1)")" vmlinuz
     }
 
     # Set bootDir
@@ -88,14 +96,15 @@ fixBootLink() {
 
     # Check if bootDir exists and contains the necessary files
     if [[ -d "$bootDir" && $(ls "$bootDir"/vmlinuz-* 2>/dev/null) && $(ls "$bootDir"/initrd.img-* 2>/dev/null) ]]; then
-        fixBoot "$bootDir"
+        fixBoot "$bootDir" || return 1
     elif [[ "$bootDir" = "$HOME/../boot" && -d "$bootDir" && $(ls "$bootDir"/vmlinuz-* 2>/dev/null) && $(ls "$bootDir"/initrd.img-* 2>/dev/null) ]]; then
-        fixBoot "$bootDir"
+        fixBoot "$bootDir" || return 1
     elif [[ "$bootDir" = "$HOME/../../boot" && -d "$bootDir" && $(ls "$bootDir"/vmlinuz-* 2>/dev/null) && $(ls "$bootDir"/initrd.img-* 2>/dev/null) ]]; then
-        fixBoot "$bootDir"
+        fixBoot "$bootDir" || return 1
     else
         echo ""
-        salrt "Couldnt update links to 'vmlinuz, initrd', no '/boot' dir.."
+        wrn "Couldnt update links to 'vmlinuz, initrd', no '/boot' dir.."
+        return 1
     fi
 
     # Set fixBootLinkSig
@@ -117,58 +126,37 @@ mount_tmpfs() {
 }
 
 #--------------------FUNCTIONS-END--------------------
-while getopts "xcCuUfhklmMno" opt; do
+while getopts "xcCfhHklmMuUno" opt; do
     case $opt in
     # while [[ $# -gt 0 ]];do case $1 in
-    x) #dont upgrade pkg
-        fetchUpdadeSig=0
-        upgradeSig=0
+    h | --help) # usage
+        echo -e "\nBe self-dependent !!"
+        exit 0
         ;;
-
+    x) #dont upgrade pkg
+        fetchUpdadeSig=0; upgradeSig=0;;
+    c) ((cleanSig++));;
+    C) cleanSig=2;;
+    f) fixpkgSig=1;;
+    H) instHeaderSig=1;;
+    k) kernFreeSig=1;;
+    l) fixBootLinkSig=1;;
+    m) mount_tmpfsSig=1;;
+    M) mount_tmpfsSig=1; m_size=$2; shift;;
+    u) upgradeSig=1;;
+    U) distUpgradeSig=1;;
+    n) # keep new conf files
+        keepNewConf='-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew"'
+        dkeepNewConf='--force-confdef --force-confnew"'
+        ;;
+    o) # keep old conf files
+        keepOldConf='-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"'
+        dkeepOldConf='--force-confdef --force-confold"'
+        ;;
     # --force-confold: do not modify the current configuration file, the new version is installed with a .dpkg-dist suffix. With this option alone, even configuration files that you have not modified are left untouched. You need to combine it with --force-confdef to let dpkg overwrite configuration files that you have not modified.
     # --force-confnew: always install the new version of the configuration file, the current version is kept in a file with the .dpkg-old suffix.
     # --force-confdef: ask dpkg to decide alone when it can and prompt otherwise. This is the default behavior of dpkg and this option is mainly useful in combination with --force-confold.
     # --force-confmiss: ask dpkg to install the configuration file if it’s currently missing (for example because you have removed the file by mistake).
-    c) # clean leftovers
-        ((cleanSig++))
-        ;;
-    C) # clean leftovers
-        cleanSig=2
-        ;;
-    f) #fix missing dependencies & reconfigure packages
-        fixpkgSig=1
-        ;;
-    l) # fix boot link for /boot/vmlinuz & initrd.img
-        fixBootLinkSig=1
-        ;;
-    k) #kernel free
-        kernFreeSig=1
-        ;;
-    m) #mount tmpfs
-        mount_tmpfsSig=1
-        ;;
-    M) #tmpfs size
-        m_size=$2
-        shift
-        ;;
-    n)
-        keepNewConf='-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew"'
-        dkeepNewConf='--force-confdef --force-confnew"'
-        ;;
-    o)
-        keepOldConf='-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"'
-        dkeepOldConf='--force-confdef --force-confold"'
-        ;;
-    u) #perform system upgrade
-        upgradeSig=1
-        ;;
-    U)
-        distUpgradeSig=1
-        ;;
-    h | --help)
-        echo -e "\nBe self-dependent !!"
-        exit 0
-        ;;
     :)
         alrt "Error: Option $1 requires an argument."
         usage
@@ -176,7 +164,7 @@ while getopts "xcCuUfhklmMno" opt; do
         ;;
     *)
         alrt "Error: Invalid option $1"
-        usage
+        # usage
         exit 1
         ;;
 
@@ -192,15 +180,16 @@ export DEBIAN_FRONTEND=noninteractive
 
 # main function..
 [ "${@:-0}" == '-x' ] && sinf "Nothing to.." && exit 0
-[ "${mount_tmpfsSig:-0}" -eq 1 ] && mount_tmpfs
-[ "${distUpgradeSig:-0}" -eq 1 ] && distUpgrade
-[ "${upgradeSig:-0}" -eq 1 ] && upgrade
-[ "${kernFreeSig:-0}" -eq 1 ] && (
+(( ${mount_tmpfsSig:-0} )) && mount_tmpfs
+(( ${distUpgradeSig:-0} )) && distUpgrade
+(( ${upgradeSig:-0} )) && upgrade
+(( ${kernFreeSig:-0} )) && (
     echo ""
-    salrt "Removing old kernels.."
+    sinf "prepairing to remove old kernels.."
     kern-free -y
 )
-[ "${fixpkgSig:-0}" -eq 1 ] && fixpkg
-[ "${cleanSig:-0}" -eq 1 ] && clean $cleanSig
-[ "${fixBootLinkSig:-0}" -eq 1 ] && fixBootLink
+(( ${instHeaderSig:-0} )) && inst_headers
+(( ${fixpkgSig:-0} )) && fixpkg
+(( ${cleanSig:-0} )) && clean $cleanSig
+(( ${fixBootLinkSig:-0} )) && fixBootLink
 [ "${?}" -eq 0 ] && (smsg "$(date): upgrade successful") | (salrt "$(date): upgrade failed")

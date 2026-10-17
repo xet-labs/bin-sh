@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RED=$'\e[31m'; YLW=$'\e[33m'; GRN=$'\e[32m'; CYN=$'\e[36m'; RST=$'\e[0m'
+info() { echo "${CYN}[ntfy-relay]${RST} $*"; }
+warn() { echo "${YLW}[ntfy-relay] WARN:${RST} $*" >&2; }
+err()  { echo "${RED}[ntfy-relay] ERROR:${RST} $*" >&2; }
+ok()   { echo "${GRN}[ntfy-relay] OK:${RST} $*"; }
+die()  { err "$*"; exit 1; }
+
+MS="# relay topics - START"
+ME="# relay topics - END"
+
+# ── relay ────────────────────────────────────────────────────────────────────
+do_relay() {
+    [[ ",$NTFY_TAGS," == *",relayed,"* ]] && exit 0
+    case "$1" in
+        local)
+            url="http://localhost/$NTFY_TOPIC" ;;
+        public)
+            url="https://ntfy-pub.xetindustries.com/$NTFY_TOPIC" ;;
+        *)  die "relay: unknown side '$1' — must be local|public" ;;
+    esac
+    curl -s \
+        -H "Title: ${NTFY_TITLE:-}" \
+        -H "Priority: ${NTFY_PRIORITY:-3}" \
+        -H "X-Tags: relayed${NTFY_TAGS:+,$NTFY_TAGS}" \
+        -d "${NTFY_MESSAGE:-}" \
+        "$url"
+}
+
+# ── generate ─────────────────────────────────────────────────────────────────
+usage_generate() {
+    cat <<EOF
+Usage: ntfy-relay.sh generate [options]
+
+  -f, --file <path>             Topics file (may be repeated or merged with -t)
+  -t, --topic <entry>           Topic entry inline (may be repeated)
+  -o, --output <path>           client.yml to update (required)
+  -s, --side <local|public>     Side this config is for (required)
+  -d, --default-host <url>      Fallback origin for bare topic names
+  -H, --default-topic-host <url>  Sets/updates 'default-host:' in yml header
+      --override <url>          Override ALL topic origin servers
+      --append                  Add topics to existing block (deduped, silent)
+      --purge                   Replace block entirely (default)
+      --dry-run                 Print result to stdout, don't write file
+
+Topic format (file or -t):
+  topic                → uses --default-host
+  server.com/topic     → explicit origin
+  # comment            → ignored (file only)
+  blank lines          → ignored (file only)
+  lines with spaces    → warned and skipped
+EOF
+    exit 1
+}
+
+# resolve a single raw topic string → "origin/topic" or "" on error
+# args: raw def ovr context_label
+resolve_topic() {
+    local raw="$1" def="$2" ovr="$3" ctx="$4"
+    local origin topic
+
+    if [[ "$raw" == *"/"* ]]; then
+        origin="${raw%/*}"; topic="${raw##*/}"
+    else
+        origin=""; topic="$raw"
+    fi
+
+    if   [[ -n "$ovr" ]]; then origin="$ovr"
+    elif [[ -z "$origin" ]]; then
+        [[ -z "$def" ]] && { warn "$ctx: no origin for '$topic' and no --default-host — skipping"; echo ""; return; }
+        origin="$def"
+    fi
+
+    echo "${origin%/}/$topic"
+}
+
+parse_topics() {
+    local file="$1" def="$2" ovr="$3" lineno=0 line resolved
+
+    while IFS= read -r raw || [[ -n "$raw" ]]; do
+        (( lineno++ )) || true
+        line="$(echo "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        if [[ "$line" == *" "* || "$line" == *$'\t'* ]]; then
+            warn "line $lineno: whitespace — ambiguous, skipping: '$line'"; continue
+        fi
+        resolved="$(resolve_topic "$line" "$def" "$ovr" "line $lineno")"
+        [[ -n "$resolved" ]] && echo "$resolved"
+    done < "$file"
+}
+
+# dedup array: echo unique entries preserving order
+dedup() { awk '!seen[$0]++'; }
+
+# extract topics currently in the marker block from yml content
+extract_block_topics() {
+    local content="$1"
+    local ms_e; ms_e="$(echo "$MS" | sed 's/[[\.*^$()+?{|]/\\&/g')"
+    local me_e; me_e="$(echo "$ME" | sed 's/[[\.*^$()+?{|]/\\&/g')"
+    echo "$content" | awk "/$ms_e/{f=1;next} /$me_e/{f=0} f && /topic:/{gsub(/.*topic:[[:space:]]*/,\"\"); print}"
+}
+
+build_block() {
+    local side="$1"; shift
+    local out="  $MS"$'\n'
+    for e in "$@"; do
+        out+="  - topic: $e"$'\n'
+        out+="    command: '/usr/local/bin/ntfy-relay.sh relay $side'"$'\n'$'\n'
+    done
+    echo "${out%$'\n'}"$'\n'"  $ME"
+}
+
+inject_block() {
+    local yml="$1" block="$2" dth="$3"
+    local content; content="$(cat "$yml" 2>/dev/null || echo "")"
+
+    if [[ -n "$dth" ]]; then
+        if echo "$content" | grep -q "^default-host:"; then
+            content="$(echo "$content" | sed "s|^default-host:.*|default-host: $dth|")"
+        else
+            content="$(echo "$content" | awk -v h="$dth" '!i&&/^[^#]/{print "default-host: "h"\n";i=1}{print}')"
+        fi
+    fi
+
+    echo "$content" | grep -q "^subscribe:" || content+=$'\n'"subscribe:"$'\n'
+
+    local ms_e me_e
+    ms_e="$(echo "$MS" | sed 's/[[\.*^$()+?{|]/\\&/g')"
+    me_e="$(echo "$ME" | sed 's/[[\.*^$()+?{|]/\\&/g')"
+    local sc; sc=$(echo "$content" | grep -c "$ms_e" || true)
+
+    if (( sc > 1 )); then
+        warn "multiple marker blocks found — collapsing"
+        content="$(echo "$content" | awk "/$ms_e/{s=1} s&&/$me_e/{s=0;next} !s{print}")"
+        sc=0
+    fi
+
+    if (( sc == 0 )); then
+        content="$(echo "$content" | awk -v b="$block" '/^subscribe:/{print;print b;next}{print}')"
+    else
+        content="$(echo "$content" | awk -v b="$block" -v s="$ms_e" -v e="$me_e" \
+            '$0~s{print b;skip=1;next} skip&&$0~e{skip=0;next} skip{next}{print}')"
+    fi
+
+    echo "$content"
+}
+
+do_generate() {
+    local files=() inline=() o="" side="" def="" dth="" ovr="" dry=0 append=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--file)               files+=("$2");  shift 2 ;;
+            -t|--topic)              inline+=("$2"); shift 2 ;;
+            -o|--output)             o="$2";         shift 2 ;;
+            -s|--side)               side="$2";      shift 2 ;;
+            -d|--default-host)       def="$2";       shift 2 ;;
+            -H|--default-topic-host) dth="$2";       shift 2 ;;
+            --override)              ovr="$2";       shift 2 ;;
+            --append)                append=1;       shift ;;
+            --purge)                 append=0;       shift ;;
+            --dry-run)               dry=1;          shift ;;
+            -h|--help)               usage_generate ;;
+            *) err "unknown option: $1"; usage_generate ;;
+        esac
+    done
+
+    [[ -z "$o"    ]] && die "--output is required"
+    [[ -z "$side" ]] && die "--side is required"
+    [[ ${#files[@]} -eq 0 && ${#inline[@]} -eq 0 ]] && die "at least one -f/--file or -t/--topic is required"
+    [[ "$side" != "local" && "$side" != "public" ]] && die "--side must be local|public"
+
+    # collect from files
+    local raw_topics=()
+    for f in "${files[@]}"; do
+        [[ ! -f "$f" ]] && die "topics file not found: $f"
+        info "parsing: $f"
+        mapfile -t _ft < <(parse_topics "$f" "$def" "$ovr")
+        raw_topics+=("${_ft[@]}")
+    done
+
+    # collect inline -t entries
+    for entry in "${inline[@]}"; do
+        local resolved; resolved="$(resolve_topic "$entry" "$def" "$ovr" "-t $entry")"
+        [[ -n "$resolved" ]] && raw_topics+=("$resolved")
+    done
+
+    # dedup incoming topics
+    mapfile -t topics < <(printf '%s\n' "${raw_topics[@]}" | dedup)
+    (( ${#topics[@]} )) || die "no valid topics resolved — nothing to generate"
+
+    # append mode: merge with existing block topics, preserve order, dedup
+    if (( append )) && [[ -f "$o" ]]; then
+        local existing; existing="$(extract_block_topics "$(cat "$o")")"
+        if [[ -n "$existing" ]]; then
+            mapfile -t topics < <( { echo "$existing"; printf '%s\n' "${topics[@]}"; } | dedup )
+        fi
+    fi
+
+    local mode; (( append )) && mode="append" || mode="purge"
+    info "side=$side  mode=$mode  topics=${#topics[@]}"
+    for t in "${topics[@]}"; do info "  → $t"; done
+
+    if [[ ! -f "$o" ]]; then
+        warn "creating: $o"
+        mkdir -p "$(dirname "$o")"
+        printf '# ntfy client config\n# generated by ntfy-relay.sh\n\nsubscribe:\n' > "$o"
+    fi
+
+    local result; result="$(inject_block "$o" "$(build_block "$side" "${topics[@]}")" "$dth")"
+
+    if (( dry )); then
+        echo "───── DRY RUN → $o ─────"
+        echo "$result"
+        echo "────────────────────────────────"
+    else
+        echo "$result" > "$o"
+        ok "written → $o"
+    fi
+}
+
+# ── entrypoint ───────────────────────────────────────────────────────────────
+case "${1:-}" in
+    relay)    [[ $# -lt 2 ]] && die "relay requires <local|public>"; do_relay "$2" ;;
+    generate) shift; do_generate "$@" ;;
+    *)
+        cat <<EOF
+Usage:
+  ntfy-relay.sh relay <local|public>    relay a received message (loop-safe)
+  ntfy-relay.sh generate [options]      update client.yml topic block
+  ntfy-relay.sh generate --help
+EOF
+        exit 1 ;;
+esac

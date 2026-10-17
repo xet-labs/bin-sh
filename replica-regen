@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+#
+# replica1-restore.sh
+#
+# Rebuilds the live "@..." subvolumes on a replica mountpoint (default
+# /run/mnt/replica0, override with --replica) from the newest btrbkx
+# backup snapshots stored under <replica>/.btrbkx.snap.
+#
+# For every mapped destination:
+#   1. Find the newest backup snapshot for that destination (by timestamp
+#      suffix, e.g. @armory.llm.20260616T1300).
+#   2. Compare it against a small state file recording which snapshot was
+#      used last time.
+#   3. If nothing changed AND the destination subvolume already exists,
+#      skip it entirely (no delete, no snapshot -> saves I/O).
+#   4. If it changed (or never existed), delete the old destination
+#      subvolume and recreate it as a fresh writable snapshot of the
+#      newest backup.
+#
+# Subvolumes that exist on the destination but are not part of the mapping
+# ("orphans") are also removed, since the task is "delete everything
+# except .btrbkx.snap and recreate it from the backups".
+#
+# Deletion always happens deepest-path-first, recreation shallowest-path
+# first, and if a parent needs rebuilding every subvolume nested under it
+# is rebuilt too (you cannot delete a parent subvolume while a child
+# subvolume still lives inside it).
+#
+# Each subvolume is deleted with `btrfs subvolume delete -R`, which
+# recurses into and removes any nested subvolumes first (so a parent
+# never fails to delete just because a child subvolume still lives
+# inside it). Afterwards the path is rm -rf'd as a fallback for any
+# plain leftover files, then re-checked with -e to confirm it's actually
+# gone - if it still exists, that's logged as an error instead of being
+# silently treated as done.
+#
+# Usage:
+#   sudo ./replica1-restore.sh [--dry-run] [--yes] [--replica PATH]
+#
+#   --dry-run   Show what would happen, change nothing.
+#   --yes / -y  Don't ask for interactive confirmation.
+#   --replica   Override the replica mountpoint (default /run/mnt/replica0).
+#
+set -uo pipefail
+shopt -s nullglob dotglob
+
+# ----------------------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------------------
+
+REPLICA_MOUNT="/run/mnt/replica0"
+DRY_RUN=false
+ASSUME_YES=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --yes|-y) ASSUME_YES=true; shift ;;
+    --replica) REPLICA_MOUNT="$2"; shift 2 ;;
+    -h|--help)
+      grep '^#' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+SNAP_DIR="$REPLICA_MOUNT/.btrbk.snap"
+STATE_FILE="$SNAP_DIR/.restore_state"
+LOCK_FILE="$SNAP_DIR/.restore.lock"
+
+# Path of the snapshot dir *relative to $REPLICA_MOUNT* - derived from
+# SNAP_DIR itself (never hardcoded) so the orphan filter below can never
+# drift out of sync with the actual snapshot directory name/location.
+SNAP_REL="${SNAP_DIR#"$REPLICA_MOUNT"/}"
+
+# destination-path-relative-to-$REPLICA_MOUNT  =>  snapshot-name-prefix-in-.btrbkx.snap
+declare -A DEST_TO_PREFIX=(
+  ["@node/root"]="@node.mx.root"
+  ["@node/user-var"]="@node.mx.user-var"
+  ["@node/data-var"]="@node.mx.data-var"
+  ["@node/user"]="@node.mx.user"
+  ["@node/opt"]="@node.mx.opt"
+  ["@node/data"]="@node.mx.data"
+  ["@armory"]="@armory"
+  ["@armory/android"]="@armory.android"
+  ["@armory/linux"]="@armory.linux"
+  ["@armory/windows"]="@armory.windows"
+  ["@armory/iso"]="@armory.iso"
+  ["@armory/llm"]="@armory.llm"
+  ["@armory/repo"]="@armory.repo"
+  ["@data"]="@data"
+  ["@datx"]="@datx"
+  ["@datx/@projects"]="@datx.projects"
+  ["@srv/forgejo.var"]="@srv.forgejo.var"
+  ["@srv/ocis.var"]="@srv.ocis.var"
+  ["@srv/postgresql.var"]="@srv.postgresql.var"
+  ["@srv/pve.pool"]="@srv.pve.pool"
+  ["@space"]="@space"
+  ["@bkp/@node.app"]="@bkp.@node.app"
+  ["@bkp/@node.user"]="@bkp.@node.user"
+  ["@bkp/@node.root/debian"]="@bkp.@node.root.debian"
+  ["@bkp/@node.root/kali"]="@bkp.@node.root.kali"
+  ["@bkp/@node.root/proxmox"]="@bkp.@node.root.proxmox"
+  ["@bkp/@.rish"]="@bkp.@.rish"
+)
+
+# ----------------------------------------------------------------------------
+# Logging helpers
+# ----------------------------------------------------------------------------
+
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+log()  { printf '[%s] %s\n' "$(ts)" "$*"; }
+warn() { printf '[%s] WARN: %s\n' "$(ts)" "$*" >&2; }
+err()  { printf '[%s] ERROR: %s\n' "$(ts)" "$*" >&2; }
+run()  {
+  if $DRY_RUN; then
+    log "DRY-RUN: $*"
+  else
+    log "RUN: $*"
+    "$@"
+  fi
+}
+
+# ----------------------------------------------------------------------------
+# Sanity checks
+# ----------------------------------------------------------------------------
+
+if [[ $EUID -ne 0 ]]; then
+  err "must be run as root"
+  exit 1
+fi
+
+if ! mountpoint -q "$REPLICA_MOUNT"; then
+  err "$REPLICA_MOUNT is not a mountpoint"
+  exit 1
+fi
+
+if [[ ! -d "$SNAP_DIR" ]]; then
+  err "$SNAP_DIR does not exist"
+  exit 1
+fi
+
+exec 9>"$LOCK_FILE" 2>/dev/null || { err "cannot open lock file $LOCK_FILE"; exit 1; }
+if ! flock -n 9; then
+  err "another instance is already running (lock: $LOCK_FILE)"
+  exit 1
+fi
+
+# ----------------------------------------------------------------------------
+# Small helpers
+# ----------------------------------------------------------------------------
+
+depth_of() {
+  local p="$1"
+  printf '%d' "$(grep -o '/' <<<"$p" | wc -l)"
+}
+
+# Print the given list of paths (one per line via stdin) sorted by depth.
+# $1 = asc | desc
+sort_by_depth() {
+  local direction="$1"
+  local sortflag="-n"
+  [[ "$direction" == "desc" ]] && sortflag="-nr"
+  local p
+  while read -r p; do
+    [[ -z "$p" ]] && continue
+    printf '%d\t%s\n' "$(depth_of "$p")" "$p"
+  done | sort -t$'\t' $sortflag -k1,1 | cut -f2-
+}
+
+# Newest backup snapshot dir name for a given prefix, or empty string.
+latest_snapshot() {
+  local prefix="$1"
+  local matches=( "$SNAP_DIR/$prefix".[0-9]* )
+  if [[ ${#matches[@]} -eq 0 ]]; then
+    echo ""
+    return
+  fi
+  printf '%s\n' "${matches[@]##*/}" | sort | tail -n1
+}
+
+subvol_exists() {
+  btrfs subvolume show "$1" &>/dev/null
+}
+
+# Ensure every path component between $REPLICA_MOUNT and $REPLICA_MOUNT/$dest
+# (exclusive of $dest itself) exists, creating any that are missing as btrfs
+# subvolumes rather than plain directories. Walks top-down so a missing
+# grandparent (e.g. "@bkp") is created before its child (e.g. "@bkp/@node.app").
+ensure_parent_subvols() {
+  local dest="$1"
+  local rel_parent
+  rel_parent="$(dirname "$dest")"
+  [[ "$rel_parent" == "." ]] && return
+
+  local accum="" part full
+  local IFS='/'
+  read -ra parts <<< "$rel_parent"
+  for part in "${parts[@]}"; do
+    [[ -z "$part" ]] && continue
+    accum="${accum:+$accum/}$part"
+    full="$REPLICA_MOUNT/$accum"
+    if [[ ! -e "$full" ]]; then
+      log "creating parent subvolume: $accum"
+      run btrfs subvolume create "$full"
+    fi
+  done
+}
+
+# Load state file (path<TAB>snapshot_used) into PREV_STATE[]
+declare -A PREV_STATE=()
+if [[ -f "$STATE_FILE" ]]; then
+  while IFS=$'\t' read -r k v; do
+    [[ -z "$k" ]] && continue
+    PREV_STATE["$k"]="$v"
+  done < "$STATE_FILE"
+fi
+
+# Working copy of state we'll write back at the end.
+declare -A NEW_STATE=()
+for k in "${!PREV_STATE[@]}"; do NEW_STATE["$k"]="${PREV_STATE[$k]}"; done
+
+# ----------------------------------------------------------------------------
+# 1. Figure out the newest snapshot for every mapped destination
+# ----------------------------------------------------------------------------
+
+declare -A LATEST_SNAP=()
+for dest in "${!DEST_TO_PREFIX[@]}"; do
+  prefix="${DEST_TO_PREFIX[$dest]}"
+  latest="$(latest_snapshot "$prefix")"
+  if [[ -z "$latest" ]]; then
+    warn "no backup snapshot found for prefix '$prefix' (destination '$dest') - skipping this one"
+    continue
+  fi
+  LATEST_SNAP["$dest"]="$latest"
+done
+
+# ----------------------------------------------------------------------------
+# 2. Decide which destinations actually need rebuilding
+# ----------------------------------------------------------------------------
+
+declare -A NEEDS=()
+for dest in "${!LATEST_SNAP[@]}"; do
+  latest="${LATEST_SNAP[$dest]}"
+  prev="${PREV_STATE[$dest]:-}"
+  full_path="$REPLICA_MOUNT/$dest"
+  if subvol_exists "$full_path" && [[ "$prev" == "$latest" ]]; then
+    continue   # unchanged -> skip, saves I/O
+  fi
+  NEEDS["$dest"]=1
+done
+
+# Cascade: if a parent destination needs rebuilding, every mapped
+# destination nested under it must be rebuilt too (child subvolumes must
+# be deleted before the parent, and re-attached after the parent is
+# recreated).
+changed=true
+while $changed; do
+  changed=false
+  for parent in "${!NEEDS[@]}"; do
+    for dest in "${!DEST_TO_PREFIX[@]}"; do
+      if [[ "$dest" == "$parent"/* && -z "${NEEDS[$dest]:-}" ]]; then
+        NEEDS["$dest"]=1
+        changed=true
+      fi
+    done
+  done
+done
+
+# ----------------------------------------------------------------------------
+# 3. Find orphan subvolumes (exist on disk, not in the mapping, not backups)
+# ----------------------------------------------------------------------------
+
+declare -A EXISTING_SUBVOLS=()
+while read -r line; do
+  path="${line#*path }"
+  [[ -z "$path" ]] && continue
+  [[ "$path" == "$SNAP_REL" || "$path" == "$SNAP_REL"/* ]] && continue
+  EXISTING_SUBVOLS["$path"]=1
+done < <(btrfs subvolume list -o "$REPLICA_MOUNT" 2>/dev/null)
+
+declare -A ORPHANS=()
+for path in "${!EXISTING_SUBVOLS[@]}"; do
+  if [[ -z "${DEST_TO_PREFIX[$path]:-}" ]]; then
+    ORPHANS["$path"]=1
+  fi
+done
+
+# ----------------------------------------------------------------------------
+# Summary / confirmation
+# ----------------------------------------------------------------------------
+
+n_skip=0
+for dest in "${!LATEST_SNAP[@]}"; do
+  [[ -z "${NEEDS[$dest]:-}" ]] && n_skip=$((n_skip + 1))
+done
+
+log "replica mount:        $REPLICA_MOUNT"
+log "mapped destinations:  ${#DEST_TO_PREFIX[@]}"
+log "unchanged (skipped):  $n_skip"
+log "to rebuild:           ${#NEEDS[@]}"
+log "orphan subvolumes:    ${#ORPHANS[@]}"
+
+if [[ ${#NEEDS[@]} -eq 0 && ${#ORPHANS[@]} -eq 0 ]]; then
+  log "nothing to do."
+  exit 0
+fi
+
+if ! $DRY_RUN && ! $ASSUME_YES; then
+  echo
+  echo "About to delete + recreate the subvolumes listed above under $REPLICA_MOUNT."
+  read -r -p "Proceed? [y/N] " reply
+  [[ "$reply" =~ ^[Yy]$ ]] || { log "aborted by user"; exit 1; }
+fi
+
+# ----------------------------------------------------------------------------
+# 4. Delete phase: orphans + rebuilds, deepest path first
+# ----------------------------------------------------------------------------
+
+to_delete=()
+for dest in "${!ORPHANS[@]}"; do to_delete+=("$dest"); done
+for dest in "${!NEEDS[@]}"; do
+  subvol_exists "$REPLICA_MOUNT/$dest" && to_delete+=("$dest")
+done
+
+while read -r dest; do
+  [[ -z "$dest" ]] && continue
+  full_path="$REPLICA_MOUNT/$dest"
+  if subvol_exists "$full_path"; then
+    log "deleting subvolume: $dest"
+    run btrfs subvolume delete -R "$full_path"
+
+    # -R deletes nested subvolumes + the subvolume itself; rm -rf is just
+    # a fallback for any plain files/dirs left behind on a partial failure.
+    if [[ -e "$full_path" ]]; then
+      run rm -rf -- "$full_path"
+    fi
+
+    if $DRY_RUN; then
+      unset 'NEW_STATE[$dest]'
+    elif [[ -e "$full_path" ]]; then
+      err "path still exists after delete -R + rm -rf: $full_path"
+    else
+      log "verified removed: $dest"
+      unset 'NEW_STATE[$dest]'
+    fi
+  fi
+done < <(printf '%s\n' "${to_delete[@]}" | sort -u | sort_by_depth desc)
+
+# ----------------------------------------------------------------------------
+# 5. Recreate phase: rebuilds only, shallowest path first
+# ----------------------------------------------------------------------------
+
+while read -r dest; do
+  [[ -z "$dest" ]] && continue
+  latest="${LATEST_SNAP[$dest]:-}"
+  if [[ -z "$latest" ]]; then
+    warn "skipping recreate of '$dest': no backup snapshot available"
+    continue
+  fi
+  full_path="$REPLICA_MOUNT/$dest"
+  src="$SNAP_DIR/$latest"
+
+  ensure_parent_subvols "$dest"
+
+  log "recreating $dest  <-  $latest"
+  if run btrfs subvolume snapshot "$src" "$full_path"; then
+    NEW_STATE["$dest"]="$latest"
+  else
+    err "failed to snapshot $src -> $full_path"
+  fi
+done < <(printf '%s\n' "${!NEEDS[@]}" | sort_by_depth asc)
+
+# ----------------------------------------------------------------------------
+# 6. Persist state
+# ----------------------------------------------------------------------------
+
+if ! $DRY_RUN; then
+  {
+    for k in "${!NEW_STATE[@]}"; do
+      printf '%s\t%s\n' "$k" "${NEW_STATE[$k]}"
+    done
+  } | sort > "$STATE_FILE.tmp"
+  mv "$STATE_FILE.tmp" "$STATE_FILE"
+fi
+
+log "done."

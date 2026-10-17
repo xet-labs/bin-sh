@@ -60,13 +60,24 @@ showLkern() {
     echo -e "$(inf "Kernel-latest: ")${latest_kernelName:-$(inf "!!!")} $(inf "(${latest_kernel:-".."})")"
 }
 
-# Get the current running kernel
-current_kernel="$(uname -r | cut -d - -f 1)"
-latest_kernel="$(dpkg --list | grep -E "linux-image-[0-9]+" | sort -V | tail -n 1 | awk '{print $2}' | cut -d - -f 3)"
+# --- CHROOT-SAFE KERNEL DETECTION ---
+# Find the actual intended boot target by reading the Debian symlinks
+if [[ -L "/vmlinuz" ]]; then
+    target_kernel_ver="$(readlink -f /vmlinuz | sed -E 's/.*vmlinuz-//')"
+elif [[ -L "/boot/vmlinuz" ]]; then
+    target_kernel_ver="$(readlink -f /boot/vmlinuz | sed -E 's/.*vmlinuz-//')"
+else
+    # Fallback to uname if symlinks are completely missing
+    target_kernel_ver="$(uname -r)"
+fi
+
+# Get the current and latest kernel versions
+current_kernel="$(echo "$target_kernel_ver" | cut -d - -f 1)"
+latest_kernel="$(dpkg --list | grep -E "^ii  linux-image-[0-9]+" | sort -V | tail -n 1 | awk '{print $2}' | cut -d - -f 3)"
 
 # Full kernel name
-current_kernelName="$(dpkg --list | grep -E "linux-image-[0-9]+" | grep -i $(uname -r) | awk '{printf $2}')"
-latest_kernelName="$(dpkg --list | grep -E "linux-image-[0-9]+" | sort -V | tail -n 1 | awk '{print $2}')"
+current_kernelName="$(dpkg --list | grep -E "^ii  linux-image-[0-9]+" | grep -i "$target_kernel_ver" | awk '{print $2}' | head -n 1)"
+latest_kernelName="$(dpkg --list | grep -E "^ii  linux-image-[0-9]+" | sort -V | tail -n 1 | awk '{print $2}')"
 
 #- out kernel data
 showCkern
@@ -85,7 +96,7 @@ elif [[ -z $current_kernelName && -z $latest_kernelName ]]; then
     alrt "system has NO KERNEL, probably in chroot.."
 
 elif [[ -z $current_kernelName && -n $current_kernel ]]; then
-    wrn "system probably in chroot.."
+    wrn "system probably in chroot or kernel missing from dpkg.."
 
 else
     wrn "system operating on older kernel.."
@@ -105,9 +116,9 @@ fi
 # print Kernel Header Modules to be removed
 lsHKM
 
-apt --purge remove ${kernelList[@]} ${headersList[@]} ${modulesList[@]} $(checkYes "0" "-y") && upgrade -xfc >>/dev/null 2>&1
+apt --purge remove ${kernelList[@]} ${headersList[@]} ${modulesList[@]} $(checkYes "0" "-y") && apt upgrade -yf >>/dev/null 2>&1
 if [[ $? == 0 ]]; then
     alrt "Old kernels successfully removed.."
 else
-    wrn "ERR , kernel removal didnt completed succesfyully.."
+    wrn "ERR , kernel removal didnt completed successfully.."
 fi

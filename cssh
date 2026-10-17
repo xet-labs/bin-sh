@@ -17,11 +17,7 @@ err() {
 
 args=()
 for arg in "$@"; do
-    if [[ "$arg" =~ ^([a-zA-Z0-9_-]+\.)?xi\.com$ ]]; then
-        args+=("${arg/xi.com/xetindustries.com}")
-    else
-        args+=("$arg")
-    fi
+    args+=("${arg//xi.com/xetindustries.com}")
 done
 
 if command -v cloudflared &>/dev/null; then

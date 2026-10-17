@@ -3,14 +3,13 @@
 # configuration
 {
     CONF="/etc/btrbk/btrbk.conf"
-    CONFX="/@.x/asset/os.conf/conf.btrbk/etc/btrbk/xlvini.btrbk.conf"
+    CONFX="/mnt/@datx/@.xlvini/asset/os.conf/app.btrbk/etc/btrbk/xlvini.btrbk.conf"
     [[ -f "${CONFX}" ]] && CONF="${CONFX}"
     SYS_HOSTNAME="$(hostname)"
-    HOSTNAME="${SYS_HOSTNAME}"
+    H="${SYS_HOSTNAME:-_host_}"
     SNAP_SRC="./.btrbk.snap"
     SNAP_DEST=""
 
-    
     # Arguments
     declare -a EARG=()
     
@@ -24,7 +23,7 @@
 _bbk() {
     local LARG=()
     LARG=("${@}")
-    HOSTNAME="${HOSTNAME:-_host}" envsubst < "$CONF" | btrbk -c /dev/stdin --exclude="${SYS_HOSTNAME}.local" "${LARG[@]}" "${EARG[@]}"
+    H="${H}" envsubst < "$CONF" | btrbk -c /dev/stdin --exclude="${SYS_HOSTNAME}.local" "${LARG[@]}" "${EARG[@]}"
     #echo "btrbk -c /dev/stdin --exclude="${SYS_HOSTNAME}.local" "${LARG[@]}" "${EARG[@]}"" >&2
 }
 

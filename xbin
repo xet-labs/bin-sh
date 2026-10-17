@@ -14,21 +14,27 @@ Finds and executes the specified binary. If the binary is not found in the
 current PATH, it dynamically loads extended paths (via xlvini.profile.sh)
 and searches for architecture-specific versions of the binary.
 
+(the arguments -r and -s must be passed before the binary name)
+
 Options:
   -h, --help      Show this help message and exit
-  -r, --resolve   Resolve and print the absolute path of the binary instead of executing it
-                  (Must be passed before the binary name)
+  -r, --resolve   Resolve path and PRINT the absolute path of the binary instead of executing it
+  -s, --source    Resolve realpath and RUN the binary
+
 
 Examples:
   ${scriptName} <binary-name>
   ${scriptName} -r <binary-name>
+  ${scriptName} -s <binary-name>
 EOF
 }
 
 RESOLVE_PATH_SIG=0
+RESOLVE_PATH_EXE_SIG=0
 
 [[ "$1" == "-h" || "$1" == "--help" ]] && { show_usage; exit 0; }
 [[ "$1" == "-r" || "$1" == "--resolve" ]] && { RESOLVE_PATH_SIG=1; shift; }
+[[ "$1" == "-s" || "$1" == "--source" ]] && { RESOLVE_PATH_EXE_SIG=1; shift; }
 TARGET="$1"; shift
 
 [ -z "$TARGET" ] && { swrn "No target specified!"; show_usage; exit 1; }
@@ -125,4 +131,5 @@ fi
 
 # Execute the binary with any passed arguments
 [ "$RESOLVE_PATH_SIG" -eq 1 ] && { echo "${BINARY}"; exit 0; }
+[ "$RESOLVE_PATH_EXE_SIG" -eq 1 ] && { exec "$(realpath ${BINARY})" "${@}"; exit $?; }
 exec "${BINARY}" "${@}"

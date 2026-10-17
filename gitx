@@ -147,9 +147,12 @@ EOF
     fi
 
     #- commit unsaved changes
-    if ! _git diff --quiet || ! _git diff --cached --quiet; then
+    if [[ -n "$(_git status --porcelain)" ]]; then
+        _git add -A
+        local CHANGED_FILES=$(_git diff --name-only --cached | sed 's/^/  /')
+
         sinf "💾 commiting changes '${TARGET_REPO_DIR}' - '$commit_msg'"
-        _git add -A && _git commit -m "$commit_msg"
+        _git commit -m "$(echo -e "$commit_msg\n[files]:\n$CHANGED_FILES")"
     else
         sinf "✅ working tree is clean '${TARGET_REPO_DIR}'"
     fi
